@@ -1,9 +1,9 @@
 # HTTP API «Аким на 5 часов»
 
 Контракт текущего сервера для фронтенда и AI-участника. Источники:
-`internal/httpapi/{handler,recommend,cors}.go`, `internal/optimizer/optimizer.go`,
+`internal/httpapi/{handler,recommend,cors,web}.go`, `internal/optimizer/optimizer.go`,
 `internal/simulation/{models,dataset,validator,decision_json,engine}.go`
-и `internal/{explanation,advisor}/service.go`. Правила расчёта: [scoring.md](scoring.md).
+и `internal/{explanation,advisor,autopilot}/service.go`. Правила расчёта: [scoring.md](scoring.md).
 Все пути относительно адреса сервера (по умолчанию `http://localhost:8080`).
 
 ## Эндпоинты
@@ -28,8 +28,38 @@
 ниже; клиенту следует посылать `Content-Type: application/json` (сервер сам
 этот заголовок не проверяет). JSON-ответы имеют
 `Content-Type: application/json; charset=utf-8` и завершающий перевод строки.
-Неизвестный путь, кроме OPTIONS, возвращает стандартный 404 Go ServeMux,
+При выключенной статике неизвестный путь, кроме OPTIONS, возвращает стандартный 404 Go ServeMux,
 `text/plain; charset=utf-8`, тело `404 page not found\n`.
+
+## Сайт и WEB_DIR
+
+`WEB_DIR` задаёт каталог собранного фронтенда и читается при старте сервера.
+По умолчанию значение пустое: статика выключена, сервер работает только как API.
+В Docker-образе установлено `WEB_DIR=/web`, туда копируется сборка `web/dist`.
+Для локальной сборки: `make web-install`, `make web-build`, затем
+`make run WEB_DIR=web/dist`. Обычный `make run` не запускает Node или Vite.
+
+При непустом `WEB_DIR` запросы GET вне `/api/` возвращают существующий файл
+из этого каталога с соответствующим Content-Type. `/` и неизвестные пути,
+например `/history` или `/some/route`, возвращают `index.html` с HTTP 200
+и `text/html; charset=utf-8` (SPA fallback). HEAD возвращает те же заголовки
+без тела. Для файлов поддерживаются условные GET и Range-запросы.
+Содержимое каталогов не перечисляется; каталог тоже открывает основной index.html.
+Несуществующий файл assets также попадает под общее правило SPA fallback.
+Если каталог или index.html отсутствует, вместо fallback возвращается 404;
+существующие файлы и API продолжают обслуживаться независимо от index.html.
+
+`/api` и **все** пути `/api/...` всегда передаются API-маршрутизатору:
+неизвестный `/api/unknown` остаётся 404, даже если одноимённый файл существует
+в каталоге сайта. Ответы и правила `/api/scenario`, `/api/simulate`,
+`/api/explain`, `/api/recommend` не меняются. Методы кроме GET/HEAD также
+идут в прежний маршрутизатор; OPTIONS обрабатывается общим CORS middleware.
+
+Файлы открываются через `http.Dir` относительно WEB_DIR; `..` не позволяет
+читать файлы за его пределами. Симлинки внутри каталога сайта не обслуживаются
+(403), чтобы ссылка не открывала доступ к внешнему файлу или каталогу.
+Для разработки `make run` запускает API, `make web-dev` — Vite на
+`http://127.0.0.1:5173` с прокси `/api` на `http://localhost:8080`.
 
 ## Запрос POST /api/simulate, POST /api/explain и POST /api/advise
 

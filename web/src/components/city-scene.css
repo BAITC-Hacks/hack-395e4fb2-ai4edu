@@ -1,0 +1,41 @@
+/* The architecture is decorative and deliberately independent of data colors. */
+.city-ground,.city-architecture { pointer-events:none; }
+.city-tone-forest { --city-left:#466758; --city-right:#254a3b; --city-roof:#a4b399; --city-rim:#bfd0b0; }
+.city-tone-sage { --city-left:#8a9f83; --city-right:#5b7d65; --city-roof:#c1cbae; --city-rim:#d8dfc4; }
+.city-tone-ivory { --city-left:#e3ddc6; --city-right:#b0b69b; --city-roof:#f2ecd7; --city-rim:#fbf6e7; }
+.city-tone-glass { --city-left:#527d6d; --city-right:#294e46; --city-roof:#a4beb0; --city-rim:#d4e5ca; }
+.city-face-left { fill:var(--city-left); }
+.city-face-right { fill:var(--city-right); }
+.city-roof { fill:var(--city-roof); }
+.city-roof-rim { stroke:var(--city-rim); }
+.city-frame { opacity:0; }
+.city-frame,.city-shell { transform-box:fill-box; transform-origin:center bottom; }
+.city-construction[data-motion=running] .city-foundation,
+.city-construction[data-motion=paused] .city-foundation { animation:city-footprint .32s both; animation-delay:var(--city-delay,0s); }
+.city-construction[data-motion=running] .city-frame,
+.city-construction[data-motion=paused] .city-frame { animation:city-structure 1.5s both; animation-delay:calc(var(--city-delay,0s) + .2s); }
+.city-construction[data-motion=running] .city-shell,
+.city-construction[data-motion=paused] .city-shell { animation:city-shell 1.15s both; animation-delay:calc(var(--city-delay,0s) + 1.15s); }
+.city-construction[data-motion=running] .city-windows,
+.city-construction[data-motion=paused] .city-windows { animation:city-lights .75s both; animation-delay:calc(var(--city-delay,0s) + 2.2s); }
+.city-construction[data-motion=running] .city-landscape,
+.city-construction[data-motion=paused] .city-landscape { animation:city-finish .8s both; animation-delay:calc(var(--city-delay,0s) + 2.45s); }
+.city-construction[data-motion=running] .city-transit,
+.city-construction[data-motion=paused] .city-transit { animation:city-lights .8s 4.5s both; }
+.city-construction[data-motion=running] .city-renovation-accent,
+.city-construction[data-motion=paused] .city-renovation-accent { animation:city-renovation 1.25s 5.25s both; }
+.city-construction[data-motion=paused] *,
+.city-construction[data-motion=paused] *::before,
+.city-construction[data-motion=paused] *::after { animation-play-state:paused!important; }
+.city-construction[data-motion=complete] *,
+.city-construction[data-motion=reduced] * { animation:none!important; }
+@keyframes city-footprint { from { opacity:0; } to { opacity:1; } }
+@keyframes city-structure { 0% { opacity:0; transform:scaleY(.025); } 12% { opacity:.8; } 66% { opacity:.8; transform:scaleY(1); } 100% { opacity:0; transform:scaleY(1); } }
+@keyframes city-shell { from { opacity:0; transform:scaleY(.025); } 18% { opacity:1; } to { opacity:1; transform:scaleY(1); } }
+@keyframes city-lights { from { opacity:0; } to { opacity:1; } }
+@keyframes city-finish { from { opacity:0; } to { opacity:1; } }
+@keyframes city-renovation { 0% { opacity:0; stroke-width:2.2; } 45% { opacity:1; stroke-width:3; } 100% { opacity:.8; stroke-width:2.2; } }
+@media(prefers-reduced-motion:reduce) {
+  .city-construction * { animation:none!important; }
+  .city-frame { opacity:0; }
+}

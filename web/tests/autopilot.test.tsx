@@ -72,7 +72,7 @@ it('rejects result application when the scenario changes while agents work',asyn
   await open();await start();expect(await screen.findByText(/Каталог или правила изменились во время запуска/)).toBeVisible();expect(localStorage.getItem(HISTORY_KEY)).toBeNull();
 });
 it('does not start a paid run in mock mode',async()=>{
-  const fetch=backend(run);await open();fireEvent.click(screen.getByRole('button',{name:/Go API/}));expect(await screen.findByText(/В mock-режиме автопилот отключён/)).toBeVisible();expect(screen.getByRole('button',{name:'Создать план с AI'})).toBeDisabled();expect(fetch.mock.calls.some(([p])=>p==='/api/autopilot')).toBe(false);
+  const fetch=backend(run);await open();fireEvent.click(screen.getByRole('button',{name:/Серверный расчёт/}));expect(await screen.findByText(/В mock-режиме автопилот отключён/)).toBeVisible();expect(screen.getByRole('button',{name:'Создать план с AI'})).toBeDisabled();expect(fetch.mock.calls.some(([p])=>p==='/api/autopilot')).toBe(false);
 });
 it('validates complete reviews and simulation data rather than trusting status alone',()=>{
   expect(isAutopilotRun(finished())).toBe(true);expect(isAutopilotRun({...finished(),result:undefined})).toBe(false);expect(isAutopilotRun({...finished(),review:{approved:false,feedback:'No',tradeoffs:[]}})).toBe(false);expect(isAutopilotRun({...finished(),result:{valid:true}})).toBe(false);

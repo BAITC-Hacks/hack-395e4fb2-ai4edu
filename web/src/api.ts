@@ -1,4 +1,4 @@
-import type {AutopilotRun, Candidate, Decision, ExplainResponse, PlanAssessment, Scenario, SimulationResult, ValidationError} from './types';
+import type {AutopilotRun, Candidate, Decision, ExplainResponse, ImproveResponse, PlanAssessment, Scenario, SimulationResult, ValidationError} from './types';
 import {isAutopilotRun, isDecision, isExplanation, isResult, isScenario} from './contract';
 import {planKey} from './validation';
 
@@ -40,12 +40,12 @@ async function request(path: string, payload?:object, options:{signal?:AbortSign
   } catch (e) {
     if(options.signal?.aborted)throw new DOMException('Request cancelled','AbortError');
     if (e instanceof ApiError) throw e;
-    throw new ApiError(controller.signal.aborted ? 'Сервер не ответил за 30 секунд. План сохранён; попробуйте ещё раз.' : 'Не удалось подключиться к Go API. Проверьте, что сервер запущен, и повторите попытку.');
+    throw new ApiError(controller.signal.aborted ? 'Сервер не ответил за 30 секунд. План сохранён; попробуйте ещё раз.' : 'Не удалось подключиться к серверу расчёта. Проверьте соединение и повторите попытку.');
   } finally { clearTimeout(timeout);options.signal?.removeEventListener('abort',abort); }
 }
 export async function getScenario(): Promise<Scenario> {
   const body = await request('/api/scenario');
-  if (!isScenario(body)) throw new ApiError('Сервер вернул неполный каталог. Проверьте версию Go API и повторите загрузку.');
+  if (!isScenario(body)) throw new ApiError('Сервер вернул неполный каталог. Повторите загрузку.');
   return body;
 }
 export async function simulate(decisions: Decision[]): Promise<SimulationResult> {
@@ -65,7 +65,20 @@ export async function assessPlan(decisions:Decision[],signal?:AbortSignal):Promi
   if(!body || typeof body.valid!=='boolean' || !Number.isFinite(body.total_cost) || !Number.isFinite(body.remaining_budget) || !Array.isArray(body.decisions) || !body.decisions.every(isDecision) || planKey(body.decisions)!==planKey(decisions))throw new ApiError('Не удалось подтвердить бюджет и валидность плана. Повторите проверку.');
   const errors=validationErrors(body.validation_errors);
   if(!body.valid&&!errors.length)throw new ApiError('Сервер не указал причины отклонения плана. Повторите проверку.');
-  return {valid:body.valid,total_cost:body.total_cost!,remaining_budget:body.remaining_budget!,decisions:body.decisions,validation_errors:errors};
+  return {valid:body.valid,total_cost:body.total_cost!,remaining_budget:body.remaining_budget!,decisions:body.decisions,validation_errors:errors,...(body.valid&&Number.isInteger(body.critical_after)&&body.critical_after!>=0?{critical_after:body.critical_after}: {})};
+}
+function isCandidate(value:unknown):value is Candidate {
+  if(!value||typeof value!=='object')return false;
+  const c=value as Candidate;
+  return Array.isArray(c.decisions)&&c.decisions.every(isDecision)&&Number.isFinite(c.final_score)&&
+    [c.total_cost,c.remaining_budget,c.critical_after].every(n=>Number.isInteger(n)&&n>=0);
+}
+export async function recommendImprove(decisions:Decision[],signal?:AbortSignal):Promise<ImproveResponse> {
+  const body=await request('/api/recommend',{mode:'improve',decisions},{signal}) as ImproveResponse|null;
+  if(!body||!Number.isFinite(body.current_score)||!Array.isArray(body.improvements)||body.improvements.length>3||
+    !body.improvements.every(c=>isCandidate(c)&&Number.isFinite(c.score_delta)&&c.score_delta>0&&c.final_score>body.current_score))
+    throw new ApiError('Сервер вернул неполную рекомендацию. Повторите запрос.');
+  return body;
 }
 export async function recommendBest(signal?:AbortSignal):Promise<Candidate> {
   const body=await request('/api/recommend',{mode:'best'},{signal}) as {best?:Candidate}|null;

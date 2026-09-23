@@ -39,6 +39,7 @@ func main() {
 			Advisor:    advisor.New(advisor.NewPlannerFromEnv(), reviewer),
 			Autopilot:  auto,
 			CORSOrigin: os.Getenv("CORS_ORIGIN"),
+			WebDir:     os.Getenv("WEB_DIR"),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

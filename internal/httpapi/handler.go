@@ -24,6 +24,7 @@ type Options struct {
 	Advisor    *advisor.Service
 	Autopilot  *autopilot.Service
 	CORSOrigin string
+	WebDir     string
 	// BestProvider must return immediately with ready=false until the search ends.
 	// Nil uses optimizer.ReadyBest; cmd/server starts the search in the background.
 	BestProvider func() (best optimizer.Candidate, ready bool)
@@ -69,7 +70,7 @@ func NewHandlerWithOptions(options Options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, options.Advisor.Advise(r.Context(), result))
 	})
-	return cors(mux, options.CORSOrigin)
+	return cors(serveWeb(mux, options.WebDir), options.CORSOrigin)
 }
 
 func simulate(w http.ResponseWriter, r *http.Request) {
