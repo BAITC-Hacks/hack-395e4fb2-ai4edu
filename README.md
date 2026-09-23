@@ -13,12 +13,28 @@ Hackathon team repository for AI4EDU
 
 ```sh
 cp .env.example .env        # при необходимости вписать OPENAI_API_KEY
-docker compose up --build   # или: make up; API на http://localhost:8080
+docker compose up --build   # или: make up; сайт и API на http://localhost:8080
 make demo                   # golden-сценарий → /api/simulate
 make demo-explain           # тот же сценарий → /api/explain
 ```
 
-Без Docker: `make run` (нужен Go 1.22+, `.env` подхватывается автоматически).
+Открыть **http://localhost:8080**: Docker собирает React-приложение и Go API,
+затем Go отдаёт их с одного адреса. Node на хосте для Docker не нужен.
+
+Режим разработки (Go 1.22+ и Node.js 20+):
+
+```sh
+make web-install           # установить зависимости фронтенда
+make run                   # терминал 1: Go API на :8080
+make web-dev               # терминал 2: сайт на http://127.0.0.1:5173
+```
+
+Vite проксирует `/api/...` на `http://localhost:8080`; отдельный CORS origin
+для этого режима не нужен. `make run` по-прежнему запускает только Go,
+не требует Node и автоматически подхватывает `.env`.
+Чтобы отдавать локальную сборку сайта через Go: `make web-build`, затем
+`make run WEB_DIR=web/dist`. При пустом `WEB_DIR` статика выключена.
+
 `make help` показывает все цели, `make check` запускает gofmt, vet, тесты и race.
 Best (`POST /api/recommend`, `mode=best`) доступен через несколько секунд после старта; до готовности возвращается 503 `not_ready`, остальные запросы работают сразу.
 В Docker контейнер всегда слушает 8080; внешний порт меняется через `HOST_PORT`.
@@ -67,6 +83,7 @@ GOTOOLCHAIN=go1.22.12 go test ./...
 | Переменная | По умолчанию | Назначение |
 |---|---|---|
 | `ADDR` | `:8080` | Адрес HTTP-сервера |
+| `WEB_DIR` | пусто; `/web` в Docker | Каталог собранного сайта; пусто отключает статику, неизвестные пути сайта открывают index.html |
 | `OPENAI_API_KEY` | пусто | Ключ OpenAI, только на backend; без ключа используется fallback |
 | `OPENAI_MODEL` | `gpt-4.1-mini` | Модель для объяснения |
 | `CORS_ORIGIN` | пусто | Единственный разрешённый origin, например `http://localhost:5173` |

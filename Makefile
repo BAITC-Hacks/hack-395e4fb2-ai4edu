@@ -8,13 +8,22 @@ BIN  := bin/server
 GOLDEN := {"decisions":[{"measure_id":"M7","district_id":"nura"},{"measure_id":"M8","district_id":"nura"},{"measure_id":"M10","district_id":"nura"},{"measure_id":"M12"},{"measure_id":"M5","district_id":"saryarka"}]}
 
 .DEFAULT_GOAL := help
-.PHONY: help run build test race vet fmt fmt-check cover check up down logs demo demo-explain clean
+.PHONY: help run build web-install web-dev web-build test race vet fmt fmt-check cover check up down logs demo demo-explain clean
 
 help: ## Show available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
 
 run: ## Run the API locally (loads .env if present)
 	go run ./cmd/server
+
+web-install: ## Install frontend dependencies
+	npm --prefix web ci
+
+web-dev: ## Run the frontend dev server on http://127.0.0.1:5173
+	npm --prefix web run dev
+
+web-build: ## Build the frontend into web/dist
+	npm --prefix web run build
 
 build: ## Build the server binary into bin/
 	CGO_ENABLED=0 go build -trimpath -o $(BIN) ./cmd/server

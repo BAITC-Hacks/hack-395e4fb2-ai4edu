@@ -26,6 +26,7 @@ func main() {
 		Addr: addr, Handler: httpapi.NewHandlerWithOptions(httpapi.Options{
 			Explainer:  explanation.New(explanation.NewOpenAIFromEnv()),
 			CORSOrigin: os.Getenv("CORS_ORIGIN"),
+			WebDir:     os.Getenv("WEB_DIR"),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
