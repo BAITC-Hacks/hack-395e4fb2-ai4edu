@@ -1,0 +1,14 @@
+import {it,expect,vi} from 'vitest';
+import snapshot from '../src/mock-scenario.json';
+import result from './fixtures/golden-result.json';
+import {DRAFT_KEY,HISTORY_KEY,readDraft,readHistory,saveDraft,saveHistory} from '../src/storage';
+import {datasetKey} from '../src/validation';
+import type {SavedRun,Scenario,SimulationResult} from '../src/types';
+const scenario=snapshot as Scenario;
+const run:SavedRun={id:'run-1',name:'Тест',createdAt:'2026-09-23T00:00:00Z',scenario,datasetKey:datasetKey(scenario),result:result as SimulationResult};
+it('restores a draft and does not silently discard stale measure IDs',()=>{const draft={name:'План',decisions:[{measure_id:'removed',district_id:'nura'}]};expect(saveDraft(draft)).toBe('');expect(readDraft().draft).toEqual(draft);});
+it.each(['{broken','null','{"version":1,"name":"x","decisions":[null]}','{"version":9,"decisions":[]}'])('ignores malformed draft %s',raw=>{localStorage.setItem(DRAFT_KEY,raw);expect(readDraft().draft.decisions).toEqual([]);expect(readDraft().notice).toBeTruthy();});
+it('loads complete backend responses, rejects malformed records and different fingerprints',()=>{saveHistory([run]);expect(readHistory().runs).toEqual([run]);localStorage.setItem(HISTORY_KEY,JSON.stringify({version:1,runs:[run,{...run,id:'bad',result:{valid:true}},{...run,id:'bad2',datasetKey:'other'}]}));expect(readHistory().runs).toEqual([run]);expect(readHistory().notice).toBeTruthy();});
+it('reports quota/storage errors without crashing',()=>{vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw new DOMException('quota');});expect(saveDraft({name:'x',decisions:[]})).toContain('Не удалось сохранить');expect(saveHistory([run])).toContain('Не удалось сохранить');});
+it('rejects a damaged nested indicator map',()=>{const bad=structuredClone(run) as any;delete bad.result.district_before_after[0].after.T1;localStorage.setItem(HISTORY_KEY,JSON.stringify({version:1,runs:[bad]}));expect(readHistory().runs).toEqual([]);});
+it('rejects a result with a missing district or changed baseline',()=>{const bad=structuredClone(run);bad.result.district_before_after.pop();saveHistory([bad]);expect(readHistory().runs).toEqual([]);const other=structuredClone(run);other.result.district_before_after[0].before.T1=99;saveHistory([other]);expect(readHistory().runs).toEqual([]);});
