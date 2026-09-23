@@ -20,6 +20,7 @@ func NewHandler() http.Handler {
 type Options struct {
 	Explainer  *explanation.Service
 	CORSOrigin string
+	WebDir     string
 	// BestProvider must return immediately with ready=false until the search ends.
 	// Nil uses optimizer.ReadyBest; cmd/server starts the search in the background.
 	BestProvider func() (best optimizer.Candidate, ready bool)
@@ -47,7 +48,7 @@ func NewHandlerWithOptions(options Options) http.Handler {
 			Explanation explanation.Explanation `json:"explanation"`
 		}{result, options.Explainer.Explain(r.Context(), result)})
 	})
-	return cors(mux, options.CORSOrigin)
+	return cors(serveWeb(mux, options.WebDir), options.CORSOrigin)
 }
 
 func simulate(w http.ResponseWriter, r *http.Request) {

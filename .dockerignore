@@ -6,3 +6,5 @@ bin/
 *.test
 *.out
 docs/
+web/node_modules
+web/dist
