@@ -1,7 +1,8 @@
 # HTTP API «Аким на 5 часов»
 
 Контракт текущего сервера для фронтенда и AI-участника. Источники:
-`internal/httpapi/{handler,cors}.go`, `internal/simulation/{models,dataset,validator,decision_json,engine}.go`
+`internal/httpapi/{handler,recommend,cors}.go`, `internal/optimizer/optimizer.go`,
+`internal/simulation/{models,dataset,validator,decision_json,engine}.go`
 и `internal/{explanation,advisor}/service.go`. Правила расчёта: [scoring.md](scoring.md).
 Все пути относительно адреса сервера (по умолчанию `http://localhost:8080`).
 
@@ -14,6 +15,7 @@
 | POST | `/api/simulate` | 200: валидация и расчёт, объект Result |
 | POST | `/api/explain` | 200: расчёт и объяснение, объект с `result` и `explanation` |
 | POST | `/api/advise` | 200: исходный и лучший проверенный результаты, проверки агента и рецензия |
+| POST | `/api/recommend` | 200: глобальный оптимум (`mode=best`) или до трёх улучшений (`mode=improve`) |
 | OPTIONS | любой путь | 204, пустое тело; CORS middleware обрабатывает до маршрутизации |
 
 Параметров URL нет. GET не требует тела. POST использует JSON-объект запроса
@@ -217,9 +219,10 @@ HTTP-маршрут отклоняет такой запрос раньше с 4
 | 422 | Нарушение правил сценария | Невалидный Result: поля ниже, без расчёта Score |
 | 429 | Заняты оба слота `/api/advise` | `{"error":"advisor_busy"}`; заголовок `Retry-After: 5` |
 | 405 | Неподдерживаемый метод для известного пути | `text/plain; charset=utf-8`, `Method Not Allowed\n`; это **не JSON** |
+| 503 | Оптимум ещё рассчитывается; только /api/recommend, mode=best | Только `valid:false`, `validation_errors` с `not_ready`, без Score |
 
 405 выставляет `Allow: GET, HEAD` для `/api/scenario`, `Allow: POST` для
-`/api/simulate`, `/api/explain` и `/api/advise`. OPTIONS перехватывается до этой проверки.
+`/api/simulate`, `/api/explain`, `/api/advise` и `/api/recommend`. OPTIONS перехватывается до этой проверки.
 
 422 содержит `valid` (boolean, false), `total_cost` (integer, сумма стоимостей
 известных мер, **включая повторы**), `remaining_budget` (integer, 100 − стоимость,
@@ -249,6 +252,7 @@ Transport/Ecology/Social/Safety/Services, несовместимости в по
 |---|---|---|---|
 | `invalid_json` | 400 | Оборванное тело `{"decisions":`; неизвестное поле `score` | Нет |
 | `request_too_large` | 413 | 65 536 пробелов перед корректным объектом | Нет |
+| `not_ready` | 503 | Запрос /api/recommend с mode=best до завершения фонового поиска | Нет |
 | `decision_count` | 422 | Четыре решения вместо пяти | Нет |
 | `duplicate_measure` | 422 | M7 выбран дважды, даже в разных районах | Повторённый ID |
 | `unknown_measure` | 422 | measure_id = M99 (или пустой ID) | Неизвестный ID |
@@ -258,6 +262,131 @@ Transport/Ecology/Social/Safety/Services, несовместимости в по
 | `budget_exceeded` | 422 | M3 + M5 + M7 + M8 + M13 стоят 127 | Нет |
 | `category_limit` | 422 | M7 + M8 + M9: три меры Social | Нет |
 | `incompatible_measures` | 422 | M1 + M3 в любых районах; M4 + M7 в одном районе; M5 + M13 в одном районе | Оба ID пары |
+
+## POST /api/recommend
+
+Эндпоинт возвращает решения и числа движка, без обращения к AI и без
+генерации текстов. Существующие `/api/scenario`, `/api/simulate`, `/api/explain`
+сохраняют свои запросы и ответы. Общие правила JSON, лимит 64 КиБ, CORS,
+OPTIONS и формат ошибок распространяются и на `/api/recommend`.
+
+### Запрос
+
+| Поле | Тип JSON | Обязательность / смысл |
+|---|---|---|
+| `mode` | string | Обязательно, строго `best` или `improve` (значение чувствительно к регистру) |
+| `decisions` | array of Decision | В режиме `improve` — исходные решения, все правила как у /api/simulate |
+
+`best`: поле `decisions` должно отсутствовать, даже `null` запрещён.
+`improve`: отсутствие `decisions`, `null` и пустой массив дают 422
+`decision_count`. Для городских мер `district_id` должен отсутствовать,
+для районных обязателен. Передавать собственные оценки нельзя.
+
+Неизвестный/отсутствующий/null `mode`, `decisions` в режиме `best`,
+неверный тип, неизвестное поле или битый JSON → 400 `invalid_json`.
+Превышение лимита чтения тела → 413 `request_too_large`.
+Невалидный сценарий в `improve` → 422 с **тем же телом**, что у
+`/api/simulate` для его `decisions`, без обёртки и без рекомендаций.
+Коды валидатора не добавлялись. GET/HEAD → 405 с `Allow: POST`;
+OPTIONS → 204 по общим правилам CORS.
+
+### 503: best ещё не готов
+
+Пока фоновый поиск не завершён, корректный запрос `{"mode":"best"}` сразу
+получает 503 с `valid:false` и одной ошибкой `not_ready`, без Score и `best`.
+Текст сообщения: `Optimal scenario is still being computed`.
+После готовности тот же запрос возвращает 200. Клиент может повторить запрос
+позже; невалидный JSON/запрос по-прежнему получает 400/413, а не 503.
+Другие эндпоинты и `mode=improve` не ждут готовности Best.
+
+Полное тело 503, полученное от запущенного сервера:
+
+<!-- example:recommend-not-ready-response -->
+```json
+{
+  "valid": false,
+  "validation_errors": [
+    {
+      "code": "not_ready",
+      "message": "Optimal scenario is still being computed"
+    }
+  ]
+}
+```
+
+### 200: best
+
+| Поле | Тип | Смысл / единицы |
+|---|---|---|
+| `best` | Candidate | Глобально лучший валидный сценарий |
+| `best.decisions` | array of Decision | Ровно 5 решений в каноническом порядке движка |
+| `best.final_score` | number | Итоговый городской Score, баллы |
+| `best.total_cost` | integer | Стоимость, условные единицы |
+| `best.remaining_budget` | integer | Остаток бюджета, условные единицы |
+| `best.critical_after` | integer | Число критических пар район × показатель после изменений |
+
+Перебираются все сочетания 5 уникальных мер из 14 и все назначения районов
+районным мерам. По бюджету, лимиту направлений и несовместимостям из каталога
+ветви отсекаются до расчёта. Каждый оставшийся полный сценарий проверяется и
+оценивается исключительно `simulation.Simulate`; отдельной формулы нет.
+На текущем датасете остаётся 694 395 сценариев.
+
+Поиск выполняется один раз на процесс через `sync.Once`. `cmd/server`
+запускает его в фоновой горутине и сразу начинает слушать HTTP. Начало и время
+завершения поиска пишутся в лог. Работу делят по первой мере сценария между
+`runtime.NumCPU()` горутинами. Каждая находит локальный оптимум; при объединении
+применяется то же сравнение Score и канонических решений, поэтому порядок
+завершения горутин не влияет на ответ.
+
+Хранятся только выбранные решения; после готовности каждый вызов заново
+получает из движка независимый результат для этих решений. Готовность
+публикуется закрытием канала, чтение HTTP не блокируется на `sync.Once`.
+Перезапуск процесса повторяет поиск. При использовании HTTP handler вне
+`cmd/server` вызывающая сторона должна запустить `optimizer.Best()` в фоне
+или передать неблокирующий `Options.BestProvider`. Без запуска поиска
+стандартный провайдер возвращает not_ready; HTTP сам поиск не запускает.
+
+Локальный замер после распараллеливания: поиск занял **14.61 с** (раньше
+около 20 с), от `make run` до HTTP 200 `/api/scenario` — **0.337 с**, включая
+запуск через `go run` с прогретым build cache. Во время поиска simulate,
+explain (fallback) и improve вернули 200; best — 503, затем 200.
+Это ориентир для конкретной машины, не гарантия задержки: время зависит от
+числа доступных CPU и нагрузки. В ответы время не включается, чтобы
+сохранить побайтовый детерминизм после готовности.
+
+### 200: improve
+
+| Поле | Тип | Смысл / единицы |
+|---|---|---|
+| `current_score` | number | Score присланного валидного сценария, баллы |
+| `improvements` | array of Improvement | От 0 до 3 лучших строго улучшающих замен; `[]`, если их нет |
+| `improvements[].decisions` | array of Decision | Полный новый набор из 5 решений в каноническом порядке |
+| `improvements[].final_score` | number | Новый городской Score, баллы |
+| `improvements[].score_delta` | number | final_score − current_score, строго положительное число баллов |
+| `improvements[].total_cost` | integer | Полная стоимость нового набора, условные единицы |
+| `improvements[].remaining_budget` | integer | Остаток бюджета нового набора, условные единицы |
+| `improvements[].critical_after` | integer | Число критических пар после изменений |
+
+Одна замена означает замену **одного решения**, остальные четыре сохраняются:
+либо та же мера получает другой район, либо выбирается другая мера с любым
+допустимым районом (городская — без района). Повторы мер запрещены и здесь.
+Рассматриваются все такие соседи; валидность и Score каждого определяет
+`simulation.Simulate`. Равные исходному Score варианты не являются улучшениями.
+Если улучшений меньше трёх, возвращаются все найденные, без заполнения массива
+повторами. Глобальный оптимум имеет пустой список улучшений; пустой список
+у другого набора означает лишь отсутствие улучшений одной заменой.
+
+Оба режима сравнивают float64 без округления и допуска: сначала больший Score,
+при точном равенстве — лексикографически меньшая последовательность пар
+`(measure_id, district_id)` канонического списка решений. Например, M10 раньше
+M2, almaty раньше nura. Improve сортируется по этому же правилу. Его дельта
+считается **от присланного сценария**, в отличие от `Result.score_delta`,
+который отсчитывается от базового города.
+
+Одинаковый вход → побайтово одинаковый JSON; перестановка решений в improve
+также сохраняет ответ. Для текущего набора данных лучший Score ≈ 57.236735,
+стоимость 98, критических значений 0. Golden-инварианты остаются прежними:
+base ≈ 52.55768, golden ≈ 56.54307.
 
 ## CORS
 
@@ -822,6 +951,183 @@ M7, M8, M10 → nura; M12 → город; M5 → saryarka.
     {
       "code": "invalid_json",
       "message": "unexpected EOF"
+    }
+  ]
+}
+```
+
+## Реальные примеры /api/recommend
+
+Оба ответа получены от запущенного сервера через HTTP и отформатированы
+без изменения данных; тест сверяет их с текущим обработчиком.
+Запросы: `POST /api/recommend`, `Content-Type: application/json`.
+Оба ответа: HTTP 200, `Content-Type: application/json; charset=utf-8`.
+
+### Глобальный оптимум
+
+Запрос:
+
+<!-- example:recommend-best-request -->
+```json
+{
+  "mode": "best"
+}
+```
+
+Ответ:
+
+<!-- example:recommend-best-response -->
+```json
+{
+  "best": {
+    "decisions": [
+      {
+        "measure_id": "M14"
+      },
+      {
+        "measure_id": "M2"
+      },
+      {
+        "measure_id": "M3",
+        "district_id": "nura"
+      },
+      {
+        "measure_id": "M8",
+        "district_id": "nura"
+      },
+      {
+        "measure_id": "M9",
+        "district_id": "nura"
+      }
+    ],
+    "final_score": 57.236734999999996,
+    "total_cost": 98,
+    "remaining_budget": 2,
+    "critical_after": 0
+  }
+}
+```
+
+### Топ-3 улучшения golden
+
+Запрос:
+
+<!-- example:recommend-improve-request -->
+```json
+{
+  "mode": "improve",
+  "decisions": [
+    {
+      "measure_id": "M7",
+      "district_id": "nura"
+    },
+    {
+      "measure_id": "M8",
+      "district_id": "nura"
+    },
+    {
+      "measure_id": "M10",
+      "district_id": "nura"
+    },
+    {
+      "measure_id": "M12"
+    },
+    {
+      "measure_id": "M5",
+      "district_id": "saryarka"
+    }
+  ]
+}
+```
+
+Ответ:
+
+<!-- example:recommend-improve-response -->
+```json
+{
+  "current_score": 56.54306999999999,
+  "improvements": [
+    {
+      "decisions": [
+        {
+          "measure_id": "M10",
+          "district_id": "nura"
+        },
+        {
+          "measure_id": "M12"
+        },
+        {
+          "measure_id": "M3",
+          "district_id": "nura"
+        },
+        {
+          "measure_id": "M7",
+          "district_id": "nura"
+        },
+        {
+          "measure_id": "M8",
+          "district_id": "nura"
+        }
+      ],
+      "final_score": 57.20555999999999,
+      "total_cost": 100,
+      "remaining_budget": 0,
+      "critical_after": 0,
+      "score_delta": 0.6624899999999982
+    },
+    {
+      "decisions": [
+        {
+          "measure_id": "M10",
+          "district_id": "nura"
+        },
+        {
+          "measure_id": "M12"
+        },
+        {
+          "measure_id": "M14"
+        },
+        {
+          "measure_id": "M7",
+          "district_id": "nura"
+        },
+        {
+          "measure_id": "M8",
+          "district_id": "nura"
+        }
+      ],
+      "final_score": 56.985820000000004,
+      "total_cost": 86,
+      "remaining_budget": 14,
+      "critical_after": 0,
+      "score_delta": 0.44275000000001086
+    },
+    {
+      "decisions": [
+        {
+          "measure_id": "M10",
+          "district_id": "nura"
+        },
+        {
+          "measure_id": "M12"
+        },
+        {
+          "measure_id": "M2"
+        },
+        {
+          "measure_id": "M7",
+          "district_id": "nura"
+        },
+        {
+          "measure_id": "M8",
+          "district_id": "nura"
+        }
+      ],
+      "final_score": 56.875820000000004,
+      "total_cost": 92,
+      "remaining_budget": 8,
+      "critical_after": 0,
+      "score_delta": 0.3327500000000114
     }
   ]
 }
