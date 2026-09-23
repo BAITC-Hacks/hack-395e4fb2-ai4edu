@@ -27,6 +27,7 @@ func NewHandlerWithOptions(options Options) http.Handler {
 		writeJSON(w, http.StatusOK, simulation.DefaultScenario())
 	})
 	mux.HandleFunc("POST /api/simulate", simulate)
+	mux.HandleFunc("POST /api/recommend", recommend)
 	mux.HandleFunc("POST /api/explain", func(w http.ResponseWriter, r *http.Request) {
 		result, ok := readSimulation(w, r)
 		if !ok {
@@ -47,26 +48,10 @@ func simulate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Both endpoints share decoding, validation and calculation, including failures.
+// Simulation and explanation share validation and calculation, including failures.
 func readSimulation(w http.ResponseWriter, r *http.Request) (simulation.Result, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var request *simulation.Request
-	if err := decoder.Decode(&request); err != nil {
-		decodeError(w, err)
-		return simulation.Result{}, false
-	}
-	if request == nil {
-		decodeError(w, errors.New("request must be a JSON object"))
-		return simulation.Result{}, false
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		if err == nil {
-			err = errors.New("request must contain exactly one JSON object")
-		}
-		decodeError(w, err)
+	request, ok := readRequest[simulation.Request](w, r)
+	if !ok {
 		return simulation.Result{}, false
 	}
 	result := simulation.Simulate(request.Decisions)
@@ -75,6 +60,31 @@ func readSimulation(w http.ResponseWriter, r *http.Request) (simulation.Result, 
 		return simulation.Result{}, false
 	}
 	return result, true
+}
+
+// All POST endpoints share JSON decoding, body limits and decode error responses.
+func readRequest[T any](w http.ResponseWriter, r *http.Request) (*T, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request *T
+	if err := decoder.Decode(&request); err != nil {
+		decodeError(w, err)
+		return nil, false
+	}
+	if request == nil {
+		decodeError(w, errors.New("request must be a JSON object"))
+		return nil, false
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			err = errors.New("request must contain exactly one JSON object")
+		}
+		decodeError(w, err)
+		return nil, false
+	}
+	return request, true
 }
 
 func decodeError(w http.ResponseWriter, err error) {
