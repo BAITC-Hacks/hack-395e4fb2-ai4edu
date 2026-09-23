@@ -108,6 +108,16 @@ func (s *Service) Advise(ctx context.Context, original simulation.Result) Advice
 			}
 			feedback := map[string]any{"evaluation": eval, "best_verified_result": out.Recommended,
 				"improvement": *out.Recommended.FinalScore - *original.FinalScore, "checks_remaining": MaxToolCalls - round - 1}
+			feedback["comparison"] = map[string]any{
+				"original_final_score":            original.FinalScore,
+				"recommended_final_score":         out.Recommended.FinalScore,
+				"original_cost":                   original.TotalCost,
+				"recommended_cost":                out.Recommended.TotalCost,
+				"original_critical_indicators":    original.CriticalAfter,
+				"recommended_critical_indicators": out.Recommended.CriticalAfter,
+				"original_breakdown":              original.FinalBreakdown,
+				"recommended_breakdown":           out.Recommended.FinalBreakdown,
+			}
 			history = append(history, marshal(map[string]any{"type": "function_call_output", "call_id": call.ID, "output": string(marshal(feedback))}))
 		}
 	}

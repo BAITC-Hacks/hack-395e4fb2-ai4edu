@@ -61,10 +61,17 @@ func TestAdviceUsesVerifiedNumbersAndIndependentReview(t *testing.T) {
 			Output string `json:"output"`
 		}
 		var feedback struct {
-			Best simulation.Result `json:"best_verified_result"`
+			Best       simulation.Result `json:"best_verified_result"`
+			Comparison struct {
+				OriginalCritical    *int `json:"original_critical_indicators"`
+				RecommendedCritical *int `json:"recommended_critical_indicators"`
+			} `json:"comparison"`
 		}
 		if json.Unmarshal(history[2], &toolOutput) != nil || json.Unmarshal([]byte(toolOutput.Output), &feedback) != nil || feedback.Best.FinalScore == nil || math.Abs(*feedback.Best.FinalScore-56.54307) > 1e-8 {
 			t.Fatal("wrong calculated feedback")
+		}
+		if feedback.Comparison.OriginalCritical == nil || feedback.Comparison.RecommendedCritical == nil || *feedback.Comparison.OriginalCritical != 1 || *feedback.Comparison.RecommendedCritical != 0 {
+			t.Fatal("comparison must use post-decision critical counts, not the city baseline")
 		}
 		return Turn{Text: "Объяснение проверенного сценария."}, nil
 	})
