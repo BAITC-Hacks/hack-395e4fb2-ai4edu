@@ -104,3 +104,35 @@ body{min-width:320px}button,input,select{font:inherit}button,a,input,select,summ
 @media(min-width:441px) and (max-width:700px) {
   .measure-facts { grid-template-columns:1fr 1fr; }
 }
+
+/* Quiet mint and sky light behind the workspace; only transforms animate. */
+:root {
+  background:linear-gradient(135deg,#edf7ef 0%,#e6f5f0 46%,#edf5fc 100%);
+  background-attachment:fixed;
+}
+body { min-height:100vh; isolation:isolate; }
+body::before,body::after {
+  content:'';
+  position:fixed;
+  inset:4vh 4vw;
+  z-index:-1;
+  pointer-events:none;
+  filter:blur(40px);
+}
+body::before {
+  background:
+    radial-gradient(ellipse at 16% 22%,#9ed9bd66,transparent 52%),
+    radial-gradient(ellipse at 78% 82%,#a8cde866,transparent 50%);
+  animation:workspace-drift 44s ease-in-out infinite alternate;
+}
+body::after {
+  background:radial-gradient(ellipse at 80% 28%,#b3e4da70,transparent 48%);
+  animation:workspace-drift 58s ease-in-out -18s infinite alternate-reverse;
+}
+@keyframes workspace-drift {
+  from { transform:translate(-2%,-2%); }
+  to { transform:translate(2%,2%); }
+}
+@media(prefers-reduced-motion:reduce) {
+  body::before,body::after { animation:none; transform:none; }
+}
