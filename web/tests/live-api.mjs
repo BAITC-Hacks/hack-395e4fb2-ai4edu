@@ -24,3 +24,14 @@ for(const pair of [['M4','M7'],['M5','M13']]){const response=await post('/api/si
 const parallel=await Promise.all([post('/api/simulate',golden),post('/api/simulate',[...golden].reverse())]);assert.deepEqual(parallel[0].body,parallel[1].body);
 console.log(`PASS golden: cost=${result.body.total_cost}, final_score=${result.body.final_score}, display=${result.body.final_score.toFixed(2)}, explanation=${explanation.body.explanation.source}`);
 console.log('PASS catalog parity, all incompatibilities, different districts, order independence and concurrent HTTP requests');
+let best;
+for(let attempt=0;attempt<60;attempt++){
+  const reply=await fetch(base+'/api/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'best'})});
+  const answer=await reply.json();
+  if(reply.status===503){assert.equal(answer.validation_errors[0].code,'not_ready');if(attempt===0)console.log('PASS live best returns structured 503 not_ready; waiting');await new Promise(resolve=>setTimeout(resolve,2000));continue;}
+  assert.equal(reply.status,200);best=answer.best;break;
+}
+assert.ok(best,'Optimizer did not finish within 120 seconds');
+const verifiedBest=await post('/api/simulate',best.decisions);assert.equal(verifiedBest.status,200);
+for(const field of ['final_score','total_cost','remaining_budget','critical_after'])assert.equal(best[field],verifiedBest.body[field]);
+console.log(`PASS live best: score=${best.final_score}, cost=${best.total_cost}; independently verified by Go simulate`);

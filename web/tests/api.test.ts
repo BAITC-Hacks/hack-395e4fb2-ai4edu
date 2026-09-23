@@ -1,5 +1,5 @@
 import {it,expect,vi} from 'vitest';
-import {explain,getScenario,simulate} from '../src/api';
+import {ApiError,assessPlan,explain,getScenario,recommendBest,simulate} from '../src/api';
 import result from './fixtures/golden-result.json';
 import explanation from './fixtures/golden-explain.json';
 import scenario from '../src/mock-scenario.json';
@@ -11,3 +11,16 @@ it('reports unavailable backend',async()=>{vi.stubGlobal('fetch',vi.fn().mockRej
 it('rejects incomplete JSON instead of rendering invented numbers',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response({valid:true})));await expect(simulate([])).rejects.toThrow('неполный результат');});
 it('handles a non-JSON proxy 500 in Russian',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:false,status:500,json:async()=>{throw new Error('HTML');}}));await expect(getScenario()).rejects.toThrow('Сервер расчёта временно недоступен');});
 it('times out stalled requests',async()=>{vi.useFakeTimers();vi.stubGlobal('fetch',vi.fn((_url,options)=>new Promise((_resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')));})));const request=getScenario();const expectation=expect(request).rejects.toThrow('30 секунд');await vi.advanceTimersByTimeAsync(30000);await expectation;});
+it('uses only relative paths, including best without a decisions field',async()=>{
+  const best={decisions:result.decisions,final_score:result.final_score,total_cost:result.total_cost,remaining_budget:result.remaining_budget,critical_after:result.critical_after};
+  const fetch=vi.fn().mockResolvedValue(response({best}));vi.stubGlobal('fetch',fetch);expect(await recommendBest()).toEqual(best);expect(fetch.mock.calls[0][0]).toBe('/api/recommend');expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({mode:'best'});
+});
+it('keeps 503 not_ready as a structured code',async()=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response({valid:false,validation_errors:[{code:'not_ready',message:'Optimal scenario is still being computed'}]},503)));
+  await expect(recommendBest()).rejects.toMatchObject({status:503,validation_errors:[{code:'not_ready',message:'Optimal scenario is still being computed'}]});
+});
+it('gets draft cost and validity from a 422 response, not a client sum',async()=>{
+  const answer={valid:false,total_cost:73,remaining_budget:27,decisions:[{measure_id:'M12'}],validation_errors:[{code:'decision_count',message:'Exactly 5'}]};
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response(answer,422)));expect(await assessPlan(answer.decisions)).toEqual(answer);
+});
+it('rejects assessment for a different plan',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response(result)));await expect(assessPlan([{measure_id:'M14'}])).rejects.toBeInstanceOf(ApiError);});

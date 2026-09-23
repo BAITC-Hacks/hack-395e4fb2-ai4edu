@@ -16,6 +16,8 @@ export interface Scenario {
   incompatibilities: { measure_ids: [string, string]; same_district_only: boolean }[];
 }
 export interface ValidationError { code: string; message: string; measure_ids?: string[] }
+export interface PlanAssessment { valid: boolean; total_cost: number; remaining_budget: number; decisions: Decision[]; validation_errors?: ValidationError[] }
+export interface Candidate { decisions: Decision[]; final_score: number; total_cost: number; remaining_budget: number; critical_after: number }
 export interface DistrictResult {
   district_id: string; name: string; population_share: number; before: Indicators; after: Indicators;
   score_before: number; score_after: number;

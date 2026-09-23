@@ -9,10 +9,18 @@ import scenario from '../src/mock-scenario.json';
 import result from './fixtures/golden-result.json';
 import explanation from './fixtures/golden-explain.json';
 import {DRAFT_KEY,HISTORY_KEY,saveDraft} from '../src/storage';
-import {datasetKey} from '../src/validation';
+import {datasetKey,validatePlan} from '../src/validation';
 import type {Decision,SavedRun,Scenario,SimulationResult} from '../src/types';
 
 const s=scenario as Scenario;
+// Keep page-flow tests focused on explicit runs. The assessment hook/API have separate tests.
+vi.mock('../src/api',async(importOriginal)=>{
+  const actual=await importOriginal<typeof import('../src/api')>();
+  return {...actual,assessPlan:vi.fn(async(decisions:Decision[])=>{
+    const checked=validatePlan(s,decisions);
+    return {valid:checked.valid,total_cost:checked.cost,remaining_budget:checked.remaining,decisions,validation_errors:checked.errors};
+  })};
+});
 const reply=(body:unknown,status=200)=>({ok:status<400,status,json:async()=>structuredClone(body)});
 const user=()=>userEvent.setup();
 let fetchMock:ReturnType<typeof vi.fn>;
@@ -20,10 +28,10 @@ beforeEach(()=>{
   fetchMock=vi.fn(async(path:string)=>reply(path.endsWith('/scenario')?scenario:path.endsWith('/simulate')?result:explanation));
   vi.stubGlobal('fetch',fetchMock);
 });
-async function openDecisions(){render(<App/>);await screen.findByRole('heading',{name:'Город в ваших руках'});await user().click(screen.getByRole('button',{name:'Ваши решения',exact:true}));await screen.findByRole('heading',{name:'Ваши решения',exact:true});}
+async function openDecisions(){render(<App/>);await screen.findByRole('heading',{name:'Город в ваших руках'});await user().click(screen.getByRole('button',{name:'Ваши решения',exact:true}));await screen.findByRole('heading',{name:'Ваши решения',exact:true});const draft=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');if(draft&&validatePlan(s,draft.decisions).valid)await waitFor(()=>expect(runButton()).toHaveAttribute('aria-disabled','false'));}
 const card=(id:string)=>document.getElementById(`title-${id}`)!.closest('article')!;
 async function add(id:string,district?:string){const u=user();if(district)await u.selectOptions(within(card(id)).getByRole('combobox'),district);await u.click(within(card(id)).getByRole('button',{name:'Добавить решение'}));}
-async function goldenPlan(){for(const [id,d] of [['M7','nura'],['M8','nura'],['M10','nura'],['M12',undefined],['M5','saryarka']] as const)await add(id,d);}
+async function goldenPlan(){for(const [id,d] of [['M7','nura'],['M8','nura'],['M10','nura'],['M12',undefined],['M5','saryarka']] as const)await add(id,d);if(!screen.queryByText('MOCK — режим разработки без backend.'))await waitFor(()=>expect(runButton()).toHaveAttribute('aria-disabled','false'));}
 const runButton=()=>screen.getByRole('button',{name:'Рассчитать результат'});
 it('runs opening → five selections → real fixture result → fallback → editing; invalidates old result',async()=>{
   await openDecisions();expect(screen.getAllByRole('article')).toHaveLength(14);expect(runButton()).toHaveAttribute('aria-disabled','true');
@@ -56,7 +64,7 @@ it('blocks same-district edits and keeps original district, then permits a valid
   await user().selectOptions(select,'almaty');expect(select).toHaveValue('almaty');
 });
 it('replaces a selected measure without needing a sixth slot',async()=>{
-  await openDecisions();await goldenPlan();await user().click(screen.getByRole('button',{name:'Заменить M5',exact:true}));await user().click(within(card('M14')).getByRole('button',{name:'Заменить этим решением'}));expect(screen.queryByRole('button',{name:'Удалить M5',exact:true})).not.toBeInTheDocument();expect(screen.getByRole('button',{name:'Удалить M14',exact:true})).toBeVisible();expect(runButton()).toHaveAttribute('aria-disabled','false');
+  await openDecisions();await goldenPlan();await user().click(screen.getByRole('button',{name:'Заменить M5',exact:true}));await user().click(within(card('M14')).getByRole('button',{name:'Заменить этим решением'}));expect(screen.queryByRole('button',{name:'Удалить M5',exact:true})).not.toBeInTheDocument();expect(screen.getByRole('button',{name:'Удалить M14',exact:true})).toBeVisible();await waitFor(()=>expect(runButton()).toHaveAttribute('aria-disabled','false'));
 });
 it('filters all five directions and shows duplicate reasons next to the action',async()=>{
   await openDecisions();await add('M12');expect(within(card('M12')).getByText(/уже в плане. Можно изменить/)).toBeVisible();

@@ -1,4 +1,4 @@
-import {render,screen,within} from '@testing-library/react';
+import {render,screen,waitFor,within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {it,expect,vi} from 'vitest';
 import App from '../src/App';
@@ -17,10 +17,11 @@ it('runs the actual application against the running Go API and restores its draf
     if(district)await u.selectOptions(within(card).getByRole('combobox'),district);
     await u.click(within(card).getByRole('button',{name:'Добавить решение'}));
   }
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Рассчитать результат'})).toHaveAttribute('aria-disabled','false'));
   await u.click(screen.getByRole('button',{name:'Рассчитать результат'}));
   expect(await screen.findByText('56,54')).toBeVisible();
   expect(await screen.findByText('Резервное объяснение · без AI',{}, {timeout:15000})).toBeVisible();
   const history=JSON.parse(localStorage.getItem(HISTORY_KEY)!).runs;
   expect(history[0].result.total_cost).toBe(95);expect(history[0].result.final_score).toBeCloseTo(56.54307,8);expect(history[0].explanation.source).toBe('fallback');
-  view.unmount();render(<App/>);await screen.findByRole('heading',{name:'Город в ваших руках'});await u.click(screen.getByRole('button',{name:'Ваши решения',exact:true}));expect(screen.getByRole('combobox',{name:'Район выбранной меры M7'})).toHaveValue('nura');expect(screen.getByRole('button',{name:'Рассчитать результат'})).toHaveAttribute('aria-disabled','false');
+  view.unmount();render(<App/>);await screen.findByRole('heading',{name:'Город в ваших руках'});await u.click(screen.getByRole('button',{name:'Ваши решения',exact:true}));expect(screen.getByRole('combobox',{name:'Район выбранной меры M7'})).toHaveValue('nura');await waitFor(()=>expect(screen.getByRole('button',{name:'Рассчитать результат'})).toHaveAttribute('aria-disabled','false'));
 });

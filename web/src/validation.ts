@@ -22,7 +22,7 @@ export function validatePlan(s: Scenario, plan: Decision[], complete = true) {
       else if (!s.districts.some(x => x.id === d.district_id)) add('unknown_district', `${m.id}: район больше не доступен. Выберите другой.`, m.id);
     }
   }
-  if (cost > s.budget) add('budget_exceeded', `Не хватает ${cost - s.budget} ед. бюджета: план стоит ${cost}, доступно ${s.budget}.`);
+  if (cost > s.budget) add('budget_exceeded', 'Выбранные меры превышают лимит бюджета из каталога. Удалите или замените меру; точную стоимость подтверждает Go.');
   for (const [category, count] of Object.entries(counts)) {
     if (count > s.max_measures_per_category) add('category_limit', `В направлении «${s.category_names[category as keyof typeof s.category_names]}» максимум ${s.max_measures_per_category} меры. Сейчас: ${count}.`);
   }
