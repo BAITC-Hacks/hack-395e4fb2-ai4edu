@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -367,13 +368,14 @@ func (s *Service) execute(ctx context.Context, id string) {
 			s.event(id, "master", "revision", "Мастер передал планировщику замечания рецензента: "+review.Feedback, iteration)
 		}
 	}
-	s.finish(id, "needs_review", "Лимит итераций достигнут. План рассчитан, но AI-проверка не завершена; задача не отмечена выполненной.")
+	s.finish(id, "needs_review", "Лимит итераций достигнут. Согласование цели или AI-проверка не завершены; задача не отмечена выполненной.")
 }
 
 func (s *Service) prepare(ctx context.Context, id, userGoal string, prior *Brief, feedback *Review, iteration int) (Brief, []simulation.Result, *Review, bool) {
 	if prior != nil {
 		s.update(id, func(r *Run) {
 			r.Brief, r.Result, r.Review, r.Optimality = nil, nil, nil, nil
+			r.GoalAudit = nil
 			r.Explanation = ""
 			r.Evaluated, r.Feasible, r.Exhaustive = 0, 0, false
 		})
@@ -404,6 +406,35 @@ func (s *Service) prepare(ctx context.Context, id, userGoal string, prior *Brief
 		s.event(id, "master", "explicit_budget_correction", correction.Feedback, iteration)
 		return brief, nil, correction, true
 	}
+	// The auditor never sees the master's interpretation or any proposed plan.
+	// Compare two independent structured readings before spending CPU on search.
+	s.event(id, "auditor", "auditing_goal", "Аудитор независимо разбирает исходную цель и ограничения.", iteration)
+	var audit Brief
+	if err := s.call(ctx, id, "auditor", map[string]any{"user_goal": userGoal, "scenario": simulation.DefaultScenario()}, &audit); err != nil {
+		s.fail(ctx, id, err)
+		return Brief{}, nil, nil, false
+	}
+	s.update(id, func(r *Run) { r.GoalAudit = &audit })
+	if strings.TrimSpace(audit.Clarification) != "" {
+		s.finish(id, "needs_clarification", audit.Clarification)
+		return Brief{}, nil, nil, false
+	}
+	if optimizer.ValidateGoal(audit.Goal) != nil {
+		s.finish(id, "needs_review", "Независимый разбор цели не прошёл проверку формата ограничений.")
+		return Brief{}, nil, nil, false
+	}
+	if requestedBudget != nil && audit.Goal.BudgetLimit != *requestedBudget {
+		s.finish(id, "needs_review", "Аудитор неверно определил явно указанный бюджет. Поиск не запущен; повторите запрос.")
+		return Brief{}, nil, nil, false
+	}
+	if !sameGoal(brief.Goal, audit.Goal) {
+		encoded, _ := json.Marshal(audit.Goal)
+		correction := &Review{RevisionTarget: "master", Feedback: "Независимый аудитор иначе понял исходный запрос: " + string(encoded) + ". Повторно проверь исходную цель и все ограничения. Не копируй другую интерпретацию без проверки; при неоднозначности запроси уточнение.", Tradeoffs: []string{}}
+		s.update(id, func(r *Run) { r.Review = correction })
+		s.event(id, "auditor", "goal_disagreement", "Разборы цели не совпали. Аудитор передал мастеру расхождения для повторной проверки.", iteration)
+		return brief, nil, correction, true
+	}
+	s.event(id, "auditor", "goal_agreed", "Независимые разборы цели и ограничений совпали. Поиск разрешён.", iteration)
 	s.event(id, "master", "delegating", "Цель зафиксирована. Мастер поручил поиск планировщику и проверку рецензенту.", iteration)
 	s.event(id, "planner", "searching", "Планировщик вызывает полный поиск допустимых планов в Go.", iteration)
 	search, err := s.config.Search(ctx, brief.Goal, 5)
@@ -441,6 +472,19 @@ func (s *Service) prepare(ctx context.Context, id, userGoal string, prior *Brief
 	})
 	s.event(id, "planner", "searched", fmt.Sprintf("Проверено %d сценариев; ограничениям соответствуют %d. Подготовлены %d лучших вариантов.", search.Evaluated, search.Feasible, len(candidates)), iteration)
 	return brief, candidates, nil, true
+}
+
+func sameGoal(a, b optimizer.Goal) bool {
+	if a.Objective != b.Objective || a.FocusDistrict != b.FocusDistrict || a.BudgetLimit != b.BudgetLimit {
+		return false
+	}
+	if (a.MaxCritical == nil) != (b.MaxCritical == nil) || (a.MaxCritical != nil && *a.MaxCritical != *b.MaxCritical) {
+		return false
+	}
+	left, right := append([]string{}, a.ProtectDistricts...), append([]string{}, b.ProtectDistricts...)
+	sort.Strings(left)
+	sort.Strings(right)
+	return strings.Join(left, ",") == strings.Join(right, ",")
 }
 
 type resolvedAction struct {

@@ -14,6 +14,19 @@ const proof:OptimalityProof={proven:true,objective:'score',best_value:57.236735,
 const completed=(patch:Partial<AutopilotRun>={}):AutopilotRun=>({id:'proof-run',status:'completed',goal:'Улучшить Score',explanation:'Проверенный результат.',result:result as SimulationResult,review:{approved:true,feedback:'Расчёты проверены.',tradeoffs:[]},events:[{agent:'planner',stage:'search',message:'Проверены допустимые планы.',iteration:1,at:now}],usage:[],estimated_cost_usd:0.02,budget_usd:0.25,iterations:1,evaluated:120,feasible:20,exhaustive:true,message:'План готов.',created_at:now,updated_at:now,...patch});
 const saved=(autopilot:AutopilotRun):SavedRun=>({id:'saved-proof',name:'Проверенный план',createdAt:now,scenario:scenario as Scenario,datasetKey:datasetKey(scenario as Scenario),result:result as SimulationResult,explanation:{source:'llm',text:autopilot.explanation},autopilot});
 
+it('validates an optional independent goal audit while preserving old runs',()=>{
+  expect(isAutopilotRun(completed())).toBe(true);
+  expect(isAutopilotRun(completed({goal_audit:{goal:{objective:'score',budget_limit:100},summary:'Независимый разбор запроса.',clarification:''}}))).toBe(true);
+  for(const invalid of [{summary:'Нет goal'},null,{goal:{objective:'score',budget_limit:'100'},summary:'Разбор',clarification:''}])expect(isAutopilotRun({...completed(),goal_audit:invalid})).toBe(false);
+});
+it('labels the independent auditor and shows its summary without implying agreement or final approval',()=>{
+  render(<AutopilotDetails run={completed({status:'running',review:undefined,goal_audit:{goal:{objective:'critical_first',max_critical:0},summary:'Пользователь хочет убрать критические показатели.',clarification:''},events:[{agent:'auditor',stage:'interpreting',message:'Независимо проверяю смысл запроса.',iteration:1,at:now}]})}/>);
+  expect(screen.getByText('Аудитор цели')).toBeVisible();
+  const audit=screen.getByRole('region',{name:'Независимый разбор цели'});expect(within(audit).getByText('Пользователь хочет убрать критические показатели.')).toBeVisible();
+  expect(within(audit).getByText(/не означает согласование цели или одобрение плана/)).toBeVisible();
+  expect(screen.queryByText('Одобрено проверяющим')).not.toBeInTheDocument();
+});
+
 it('states goal-constrained optimality and score ceiling only from a proven exhaustive certificate',()=>{
   render(<AutopilotDetails run={completed({optimality:proof})}/>);
   const section=screen.getByRole('region',{name:'Проверка оптимальности плана'});

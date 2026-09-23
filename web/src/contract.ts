@@ -47,8 +47,8 @@ export function isAutopilotRun(v: unknown): v is AutopilotRun {
   if (!['estimated_cost_usd','budget_usd'].every(k => amount(v[k])) || !['iterations','evaluated','feasible'].every(k => count(v[k])) || typeof v.exhaustive !== 'boolean') return false;
   if (!list(v.events) || !v.events.every(e => obj(e) && ['agent','stage','message'].every(k => str(e[k])) && count(e.iteration) && date(e.at))) return false;
   if (!list(v.usage) || !v.usage.every(u => obj(u) && str(u.model) && count(u.input_tokens) && count(u.output_tokens) && amount(u.estimated_cost_usd) && typeof u.uncertain === 'boolean')) return false;
-  if (v.brief !== undefined) {
-    const b = v.brief;
+  for (const b of [v.brief,v.goal_audit]) {
+    if (b === undefined) continue;
     if (!obj(b) || !text(b.summary) || !text(b.clarification) || !obj(b.goal) || !text(b.goal.objective)) return false;
     if (b.goal.focus_district !== undefined && !text(b.goal.focus_district) || b.goal.budget_limit !== undefined && !amount(b.goal.budget_limit) || b.goal.max_critical != null && !count(b.goal.max_critical) || b.goal.protect_districts != null && !strings(b.goal.protect_districts)) return false;
   }

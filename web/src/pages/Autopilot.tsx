@@ -18,7 +18,7 @@ export function Autopilot({run,error,notice,pending,starting,cancelling,mock,rea
         {mock&&<p className="notice warning">В mock-режиме автопилот отключён. Подключите API для работы агентов.</p>}
       </form>
     </section>
-    {pending&&!error&&<Loading>Координатор → поиск → планировщик → проверяющий. Можно перейти на другую страницу; работа продолжится.</Loading>}
+    {pending&&!error&&<Loading>Координатор → аудитор цели → поиск → планировщик → проверяющий. Можно перейти на другую страницу; работа продолжится.</Loading>}
     {error&&<ErrorBox message={error} retry={pending?onRefresh:undefined}/>}
     {notice&&<div className="notice warning">{notice}{run?.status==='completed'&&<button className="text-button" onClick={onHistory}>Открыть историю</button>}</div>}
     {run&&<AutopilotDetails run={run}/>}

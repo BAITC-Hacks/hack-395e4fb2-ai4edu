@@ -1,7 +1,7 @@
 import type {AutopilotObjective,AutopilotRun,AutopilotStatus} from '../types';
 
 export const statusNames:Record<AutopilotStatus,string>={queued:'В очереди',running:'Агенты готовят план',completed:'План проверен и готов',needs_clarification:'Нужно уточнить цель',infeasible:'Нет плана с такими ограничениями',needs_review:'Проверка не завершена',budget_exceeded:'Лимит расходов AI достигнут',unavailable:'AI временно недоступен',cancelled:'Запуск остановлен',timeout:'Время запуска истекло',failed:'Запуск завершился ошибкой'};
-const roles:Record<string,string>={master:'Координатор',search:'Поиск вариантов',planner:'Планировщик',reviewer:'Проверяющий',system:'Система'};
+const roles:Record<string,string>={master:'Координатор',auditor:'Аудитор цели',search:'Поиск вариантов',planner:'Планировщик',reviewer:'Проверяющий',system:'Система'};
 const objectives:Record<AutopilotObjective,string>={score:'Score города',weakest_district:'Score самого слабого района',focus_district:'Score приоритетного района',critical_first:'Количество критических показателей'};
 function Optimality({run}:{run:AutopilotRun}) {
   const proof=run.optimality;
@@ -25,6 +25,7 @@ export function AutopilotDetails({run}:{run:AutopilotRun}) {
     <div className="section-heading"><div><p className="eyebrow">AI-АВТОПИЛОТ</p><h2>{statusNames[run.status]}</h2><p>{run.goal||'Максимальное качество жизни в пределах бюджета'}</p></div><span className={`tag ${run.status==='completed'?'':'fallback'}`}>{run.status==='completed'?'Одобрено проверяющим':'Результат ещё не одобрен'}</span></div>
     <div className="autopilot-body">
       {run.brief?.summary&&<p>{run.brief.summary}</p>}
+      {run.goal_audit&&<section className="notice" aria-label="Независимый разбор цели"><h3>Независимый разбор цели</h3>{run.goal_audit.summary&&<p>{run.goal_audit.summary}</p>}{run.goal_audit.clarification&&<p>{run.goal_audit.clarification}</p>}<p className="help">Аудитор отдельно интерпретировал исходный запрос. Сам факт разбора не означает согласование цели или одобрение плана.</p></section>}
       {run.message&&<p role="status">{run.message}</p>}
       {run.status==='needs_clarification'&&run.brief?.clarification&&<div className="notice warning">{run.brief.clarification}</div>}
       {run.status!=='completed'&&run.result&&<div className="notice warning">Найден промежуточный вариант. Он не прошёл весь цикл проверки и не заменяет ваш план.</div>}

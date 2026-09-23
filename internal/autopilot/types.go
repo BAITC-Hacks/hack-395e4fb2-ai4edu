@@ -1,4 +1,4 @@
-// Package autopilot coordinates a master, planner and reviewer around verified
+// Package autopilot coordinates a master, goal auditor, planner and reviewer around verified
 // simulator output. Only the Go engine can produce numerical plan results.
 package autopilot
 
@@ -61,6 +61,7 @@ type Run struct {
 	Status           string             `json:"status"`
 	Goal             string             `json:"goal"`
 	Brief            *Brief             `json:"brief,omitempty"`
+	GoalAudit        *Brief             `json:"goal_audit,omitempty"`
 	Result           *simulation.Result `json:"result,omitempty"`
 	Explanation      string             `json:"explanation"`
 	Review           *Review            `json:"review,omitempty"`

@@ -45,6 +45,7 @@ export interface AutopilotGoal {
   objective: string; focus_district?: string; budget_limit?: number;
   max_critical?: number|null; protect_districts?: string[]|null;
 }
+export interface AutopilotBrief {goal: AutopilotGoal; summary: string; clarification: string}
 export type AutopilotObjective = 'score'|'weakest_district'|'focus_district'|'critical_first';
 export interface OptimalityProof {
   proven: boolean; objective: AutopilotObjective;
@@ -52,7 +53,8 @@ export interface OptimalityProof {
 }
 export interface AutopilotRun {
   id: string; status: AutopilotStatus; goal: string;
-  brief?: {goal: AutopilotGoal; summary: string; clarification: string};
+  brief?: AutopilotBrief;
+  goal_audit?: AutopilotBrief;
   result?: SimulationResult; explanation: string;
   review?: {approved: boolean; feedback: string; tradeoffs: string[]; revision_target?: 'none'|'planner'|'master'};
   optimality?: OptimalityProof;

@@ -38,7 +38,7 @@ func (f *fakeAgents) calls() []string {
 }
 func fillRole(role string, out any) {
 	switch role {
-	case "master":
+	case "master", "auditor":
 		*out.(*Brief) = Brief{Goal: optimizer.Goal{Objective: "score", BudgetLimit: 100, ProtectDistricts: []string{}}, Summary: "Повысить Score"}
 	case "planner":
 		*out.(*Proposal) = Proposal{CandidateIndex: 0, Explanation: "План рассчитан по данным симулятора."}
@@ -146,10 +146,10 @@ func TestMasterRevisionLoopAndVerifiedNumbers(t *testing.T) {
 	if r.Status != "completed" || r.Iterations != 2 || r.Result == nil || math.Abs(*r.Result.FinalScore-56.54307) > 1e-8 || r.Review == nil || !r.Review.Approved {
 		t.Fatalf("unexpected completed result: %+v", r)
 	}
-	if !reflect.DeepEqual(a.calls(), []string{"master", "planner", "reviewer", "planner", "reviewer"}) {
+	if !reflect.DeepEqual(a.calls(), []string{"master", "auditor", "planner", "reviewer", "planner", "reviewer"}) {
 		t.Fatal(a.calls())
 	}
-	if math.Abs(r.EstimatedCostUSD-.005) > 1e-9 {
+	if math.Abs(r.EstimatedCostUSD-.006) > 1e-9 {
 		t.Fatal("usage not aggregated", r.EstimatedCostUSD)
 	}
 	*r.Result.FinalScore = 9999
@@ -217,7 +217,7 @@ func TestAutopilotStopsWithoutFalseSuccess(t *testing.T) {
 			if tc.name == "clarification" && len(a.calls()) != 1 {
 				t.Fatal("asked other agents before clarification")
 			}
-			if tc.name == "repeated_proposal" && len(a.calls()) != 4 {
+			if tc.name == "repeated_proposal" && len(a.calls()) != 5 {
 				t.Fatal("stalled loop did not stop", a.calls())
 			}
 		})
@@ -247,7 +247,7 @@ func TestMasterRejectsFeasibleButWorsePlan(t *testing.T) {
 		return optimizer.SearchResult{Candidates: []simulation.Result{best, testResult()}, Exhaustive: true, Evaluated: 2, Feasible: 2}, nil
 	}})
 	r := awaitRun(t, s, startRun(t, s).ID)
-	if r.Status != "needs_review" || len(a.calls()) != 2 || r.Result == nil || math.Abs(*r.Result.FinalScore-57.236735) > 1e-8 {
+	if r.Status != "needs_review" || len(a.calls()) != 3 || r.Result == nil || math.Abs(*r.Result.FinalScore-57.236735) > 1e-8 {
 		t.Fatal("inferior plan bypassed master", r.Status, a.calls())
 	}
 }
@@ -344,6 +344,10 @@ func TestReviewerRoutesGoalCorrectionToMaster(t *testing.T) {
 				}
 				out.(*Brief).Goal.BudgetLimit = 95
 			}
+		case "auditor":
+			if masters == 2 {
+				out.(*Brief).Goal.BudgetLimit = 95
+			}
 		case "reviewer":
 			reviews++
 			if reviews == 1 {
@@ -373,7 +377,7 @@ func TestReviewerRoutesGoalCorrectionToMaster(t *testing.T) {
 	if r.Optimality == nil || !r.Optimality.Proven || r.Optimality.ScoreCeiling == nil || *r.Optimality.ScoreCeiling != *testResult().FinalScore {
 		t.Fatal("optimality certificate was not replaced after goal correction", r.Optimality)
 	}
-	if !reflect.DeepEqual(a.calls(), []string{"master", "planner", "reviewer", "master", "planner", "reviewer"}) {
+	if !reflect.DeepEqual(a.calls(), []string{"master", "auditor", "planner", "reviewer", "master", "auditor", "planner", "reviewer"}) {
 		t.Fatal(a.calls())
 	}
 }
@@ -429,7 +433,7 @@ func TestMasterCorrectionSharesIterationLimit(t *testing.T) {
 	}}
 	s := testService(t, a, Config{MaxIterations: 2})
 	r := awaitRun(t, s, startRun(t, s).ID)
-	if r.Status != "needs_review" || r.Iterations != 2 || len(a.calls()) != 6 {
+	if r.Status != "needs_review" || r.Iterations != 2 || len(a.calls()) != 8 {
 		t.Fatalf("master bypassed shared iteration limit: %+v calls=%v", r, a.calls())
 	}
 }
@@ -472,6 +476,9 @@ func TestExplicitBudgetGuardRepairsBeforeSearch(t *testing.T) {
 				out.(*Brief).Goal.BudgetLimit = 95
 			}
 		}
+		if role == "auditor" {
+			out.(*Brief).Goal.BudgetLimit = 95
+		}
 		return Usage{InputTokens: 1, EstimatedCostUSD: .001}, nil
 	}}
 	s := testService(t, a, Config{Search: func(ctx context.Context, g optimizer.Goal, n int) (optimizer.SearchResult, error) {
@@ -486,7 +493,7 @@ func TestExplicitBudgetGuardRepairsBeforeSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := awaitRun(t, s, initial.ID)
-	if r.Status != "completed" || r.Iterations != 2 || masters != 2 || searches != 1 || !reflect.DeepEqual(a.calls(), []string{"master", "master", "planner", "reviewer"}) {
+	if r.Status != "completed" || r.Iterations != 2 || masters != 2 || searches != 1 || !reflect.DeepEqual(a.calls(), []string{"master", "master", "auditor", "planner", "reviewer"}) {
 		t.Fatalf("numeric guard did not recover: %+v, calls=%v", r, a.calls())
 	}
 }

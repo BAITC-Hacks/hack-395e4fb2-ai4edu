@@ -20,7 +20,7 @@ func (f agentTransport) RoundTrip(r *http.Request) (*http.Response, error) { ret
 
 func configuredAgents(t *testing.T) *openAIAgents {
 	t.Helper()
-	for _, key := range []string{"OPENAI_MASTER_MODEL", "OPENAI_PLANNER_MODEL", "OPENAI_REVIEWER_MODEL", "OPENAI_AGENT_MODEL", "OPENAI_MODEL", "OPENAI_INPUT_USD_PER_MILLION", "OPENAI_OUTPUT_USD_PER_MILLION"} {
+	for _, key := range []string{"OPENAI_MASTER_MODEL", "OPENAI_AUDITOR_MODEL", "OPENAI_PLANNER_MODEL", "OPENAI_REVIEWER_MODEL", "OPENAI_AGENT_MODEL", "OPENAI_MODEL", "OPENAI_INPUT_USD_PER_MILLION", "OPENAI_OUTPUT_USD_PER_MILLION"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("OPENAI_API_KEY", "test-only-secret")
@@ -54,6 +54,7 @@ func TestAgentsStructuredProtocolAndUsage(t *testing.T) {
 		output                  any
 	}{
 		{"master", briefJSON, "Нельзя молча опускать", &Brief{}},
+		{"auditor", briefJSON, "ТОЛЬКО user_goal и scenario", &Brief{}},
 		{"planner", proposalJSON, "previous_review", &Proposal{}},
 		{"reviewer", reviewJSON, "approved=true только", &Review{}},
 	} {
@@ -372,12 +373,13 @@ func TestAgentsMasterRevisionKeepsOriginalGoalAndFeedback(t *testing.T) {
 
 func TestAgentsModelConfiguration(t *testing.T) {
 	client := configuredAgents(t)
-	if client.roles["master"].model != "gpt-4.1-mini" {
+	if client.roles["master"].model != "gpt-4.1-mini" || client.roles["auditor"].model != "gpt-4.1-mini" || len(client.roles) != 4 {
 		t.Fatal("wrong default")
 	}
 	t.Setenv("OPENAI_MODEL", "gpt-6-luna")
 	t.Setenv("OPENAI_AGENT_MODEL", "gpt-6-sol")
 	t.Setenv("OPENAI_REVIEWER_MODEL", "gpt-6-astra")
+	t.Setenv("OPENAI_AUDITOR_MODEL", "gpt-6-luna")
 	agents, err := NewAgentsFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -385,6 +387,9 @@ func TestAgentsModelConfiguration(t *testing.T) {
 	client = agents.(*openAIAgents)
 	if client.roles["master"].model != "gpt-6-sol" || client.roles["planner"].rates.input != 2 || client.roles["reviewer"].model != "gpt-6-astra" || client.roles["reviewer"].rates.output != 50 {
 		t.Fatal("wrong role precedence/prices")
+	}
+	if client.roles["auditor"].model != "gpt-6-luna" || client.roles["auditor"].rates != (tokenRates{.1, .5}) {
+		t.Fatal("auditor model override ignored")
 	}
 	t.Setenv("OPENAI_AGENT_MODEL", "")
 	agents, err = NewAgentsFromEnv()
@@ -415,6 +420,61 @@ func TestAgentsModelConfiguration(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", " ")
 	if agents, err = NewAgentsFromEnv(); err != nil || agents != nil {
 		t.Fatal("empty key should disable agents without parsing other config")
+	}
+}
+
+func TestAgentsAuditorBlindInputAndBriefValidation(t *testing.T) {
+	client := configuredAgents(t)
+	validInput := json.RawMessage(`{"user_goal":"Бюджет 95, устрани все критические показатели","scenario":{}}`)
+	for _, output := range []string{
+		briefJSON,
+		strings.Replace(briefJSON, `"max_critical":null`, `"max_critical":0`, 1),
+		strings.Replace(briefJSON, `"clarification":""`, `"clarification":"Уточните неподдерживаемое условие"`, 1),
+		`{}`,
+		strings.Replace(briefJSON, `"budget_limit":100`, `"budget_limit":101`, 1),
+		strings.Replace(briefJSON, `"protect_districts":[]`, `"protect_districts":["nura","nura"]`, 1),
+	} {
+		client.http.Transport = agentTransport(func(r *http.Request) (*http.Response, error) {
+			var body struct {
+				Instructions string `json:"instructions"`
+				Input        string `json:"input"`
+			}
+			if json.NewDecoder(r.Body).Decode(&body) != nil || body.Input != string(validInput) {
+				t.Fatal("auditor original input changed")
+			}
+			if body.Instructions == masterInstructions || strings.Contains(body.Instructions, "previous_brief") || strings.Contains(body.Instructions, "previous_review") {
+				t.Fatal("auditor prompt is anchored to another agent")
+			}
+			for _, required := range []string{"ТОЛЬКО user_goal и scenario", "Самостоятельно извлеки", "clarification конкретным вопросом", "Нельзя молча опускать"} {
+				if !strings.Contains(body.Instructions, required) {
+					t.Fatalf("auditor instruction missing: %s", required)
+				}
+			}
+			return agentHTTPResponse(200, agentResponse("completed", output)), nil
+		})
+		var brief Brief
+		_, err := client.Call(context.Background(), "auditor", validInput, &brief)
+		wantValid := validateAgentOutput("master", []byte(output)) == nil
+		if (err == nil) != wantValid {
+			t.Fatalf("auditor must validate same Brief schema, valid=%v error=%v", wantValid, err)
+		}
+	}
+	client.http.Transport = agentTransport(func(*http.Request) (*http.Response, error) {
+		t.Fatal("non-blind auditor input reached provider")
+		return nil, nil
+	})
+	for _, forbidden := range []string{"brief", "previous_brief", "previous_review", "candidates", "proposal", "selected_actions"} {
+		input, _ := json.Marshal(map[string]any{"user_goal": "Бюджет 95", "scenario": map[string]any{}, forbidden: "another agent output"})
+		if _, err := client.Estimate("auditor", input); err == nil {
+			t.Fatal("auditor accepted anchored input estimate")
+		}
+		var brief Brief
+		if _, err := client.Call(context.Background(), "auditor", input, &brief); err == nil {
+			t.Fatal("auditor accepted anchored input")
+		}
+	}
+	if _, err := client.Estimate("auditor", json.RawMessage(`{"scenario":{}}`)); err == nil {
+		t.Fatal("auditor accepted missing original goal")
 	}
 }
 

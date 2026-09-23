@@ -23,7 +23,7 @@ func (a autopilotAgents) Call(ctx context.Context, role string, _ json.RawMessag
 		return autopilot.Usage{Uncertain: true}, ctx.Err()
 	}
 	switch role {
-	case "master":
+	case "master", "auditor":
 		*out.(*autopilot.Brief) = autopilot.Brief{Goal: optimizer.Goal{Objective: "score", BudgetLimit: 100, ProtectDistricts: []string{}}, Summary: "Лучший план"}
 	case "planner":
 		*out.(*autopilot.Proposal) = autopilot.Proposal{CandidateIndex: 0, Explanation: "Объяснение проверенного плана."}
