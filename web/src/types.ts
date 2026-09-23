@@ -36,6 +36,23 @@ export interface Explanation { source: 'llm'|'fallback'; text: string }
 export interface ExplainResponse { result: SimulationResult; explanation: Explanation }
 export interface SavedRun {
   id: string; name: string; createdAt: string; scenario: Scenario; datasetKey: string;
-  result: SimulationResult; explanation?: Explanation;
+  result: SimulationResult; explanation?: Explanation; autopilot?: AutopilotRun;
 }
-export type Page = 'overview'|'decisions'|'result'|'history';
+export type Page = 'overview'|'autopilot'|'decisions'|'result'|'history';
+export const autopilotStatuses = ['queued','running','completed','needs_clarification','infeasible','needs_review','budget_exceeded','unavailable','cancelled','timeout','failed'] as const;
+export type AutopilotStatus = typeof autopilotStatuses[number];
+export interface AutopilotGoal {
+  objective: string; focus_district?: string; budget_limit?: number;
+  max_critical?: number|null; protect_districts?: string[]|null;
+}
+export interface AutopilotRun {
+  id: string; status: AutopilotStatus; goal: string;
+  brief?: {goal: AutopilotGoal; summary: string; clarification: string};
+  result?: SimulationResult; explanation: string;
+  review?: {approved: boolean; feedback: string; tradeoffs: string[]};
+  events: {agent: string; stage: string; message: string; iteration: number; at: string}[];
+  usage: {model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number; uncertain: boolean}[];
+  estimated_cost_usd: number; budget_usd: number; iterations: number;
+  evaluated: number; feasible: number; exhaustive: boolean; message: string;
+  created_at: string; updated_at: string;
+}

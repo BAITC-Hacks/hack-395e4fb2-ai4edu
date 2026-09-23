@@ -6,3 +6,6 @@ bin/
 *.test
 *.out
 docs/
+.autopilot/
+web/node_modules/
+web/dist/

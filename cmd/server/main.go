@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"hack-395e4fb2-ai4edu/internal/advisor"
+	"hack-395e4fb2-ai4edu/internal/autopilot"
 	"hack-395e4fb2-ai4edu/internal/explanation"
 	"hack-395e4fb2-ai4edu/internal/httpapi"
 	"hack-395e4fb2-ai4edu/internal/optimizer"
@@ -17,6 +18,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	auto, err := autopilot.NewFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer auto.Close()
 	go func() {
 		started := time.Now()
 		log.Print("Computing optimal scenario")
@@ -31,6 +37,7 @@ func main() {
 		Addr: addr, Handler: httpapi.NewHandlerWithOptions(httpapi.Options{
 			Explainer:  explanation.New(provider),
 			Advisor:    advisor.New(advisor.NewPlannerFromEnv(), reviewer),
+			Autopilot:  auto,
 			CORSOrigin: os.Getenv("CORS_ORIGIN"),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

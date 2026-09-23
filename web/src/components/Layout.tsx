@@ -1,6 +1,6 @@
-import {Building2, LayoutDashboard, SlidersHorizontal, ChartNoAxesCombined, History, MapPin} from 'lucide-react';
+import {Building2, LayoutDashboard, SlidersHorizontal, ChartNoAxesCombined, History, MapPin, Sparkles} from 'lucide-react';
 import type {Page,Scenario} from '../types';
-const nav = [{id:'overview',label:'Обзор города',icon:LayoutDashboard},{id:'decisions',label:'Ваши решения',icon:SlidersHorizontal},{id:'result',label:'Результат',icon:ChartNoAxesCombined},{id:'history',label:'История',icon:History}] as const;
+const nav = [{id:'overview',label:'Обзор города',icon:LayoutDashboard},{id:'autopilot',label:'AI-автопилот',icon:Sparkles},{id:'decisions',label:'Ваши решения',icon:SlidersHorizontal},{id:'result',label:'Результат',icon:ChartNoAxesCombined},{id:'history',label:'История',icon:History}] as const;
 export function Layout({page,navigate,scenario,mock,onMode,children}:{page:Page;navigate:(p:Page)=>void;scenario?:Scenario;mock:boolean;onMode:()=>void;children:React.ReactNode}) {
   return <div className="shell"><a href="#main-content" className="skip-link">К содержимому</a><aside className="sidebar">
     <button className="brand" onClick={()=>navigate('overview')} aria-label="Аким — обзор города"><span className="brand-mark"><Building2 size={25}/></span>аким<span className="brand-dot">.</span></button>

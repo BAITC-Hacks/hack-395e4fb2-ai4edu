@@ -11,6 +11,8 @@ import {Overview} from './pages/Overview';
 import {Decisions} from './pages/Decisions';
 import {Result} from './pages/Result';
 import {History} from './pages/History';
+import {Autopilot} from './pages/Autopilot';
+import {useAutopilot} from './useAutopilot';
 
 export default function App() {
   const [initial] = useState(readDraft);
@@ -34,6 +36,15 @@ export default function App() {
   const explainingIds = useRef(new Set<string>());
   const [explainState,setExplainState] = useState<Record<string,{loading:boolean;error:string}>>({});
   const lastDraft = useRef(stableJSON(initial.draft)), lastHistory = useRef(stableJSON(initialHistory.runs));
+  const draftIdentity=stableJSON({name,decisions:plan});
+  const latestDraft=useRef(draftIdentity);latestDraft.current=draftIdentity;
+  const autopilot=useAutopilot({scenario,draftKey:draftIdentity,mock,onComplete:(completed,snapshot,startedDraft,suppressApply)=>{
+    const saved:SavedRun={id:`autopilot-${completed.id}`,name:completed.goal.trim().slice(0,120)||'План AI-автопилота',createdAt:completed.updated_at,scenario:snapshot,datasetKey:datasetKey(snapshot),result:completed.result!,explanation:{source:'llm',text:completed.explanation},autopilot:completed};
+    setRuns(p=>p.some(r=>r.id===saved.id)?p:[saved,...p]);
+    if(suppressApply||sending.current||latestDraft.current!==startedDraft)return false;
+    setPlan(saved.result.decisions.map(d=>({...d})));setName(saved.name);setCurrent(saved);setArchived(false);navigate('result');
+    return true;
+  }});
 
   useEffect(()=>{
     let alive=true;
@@ -64,7 +75,7 @@ export default function App() {
     setPlan(next);setCurrent(null);setArchived(false);setRunError('');
   }
   async function loadExplanation(run:SavedRun) {
-    if(explainingIds.current.has(run.id)||mock)return;
+    if(explainingIds.current.has(run.id)||mock||run.autopilot)return;
     explainingIds.current.add(run.id);
     setExplainState(p=>({...p,[run.id]:{loading:true,error:''}}));
     try {
@@ -99,12 +110,14 @@ export default function App() {
     if(archived){setPlan(visible.result.decisions.map(d=>({...d})));setName(visible.name);setArchived(false);}
     navigate('decisions');
   }
-  return <Layout page={page} navigate={navigate} scenario={scenario} mock={mock} onMode={()=>{if(sending.current)return;setMock(p=>!p);setCurrent(null);setArchived(false);setRunError('');}}>
+  return <Layout page={page} navigate={navigate} scenario={scenario} mock={mock} onMode={()=>{if(sending.current||autopilot.pending)return;setMock(p=>!p);setCurrent(null);setArchived(false);setRunError('');}}>
     {storageNotice && <div className="notice storage-notice" role="status"><span>{storageNotice}</span><button className="text-button" onClick={()=>setStorageNotice('')} aria-label="Скрыть уведомление о хранении">Закрыть</button></div>}
-    {page==='history'?<History runs={runs} onStart={()=>navigate('decisions')} onOpen={r=>{setCurrent(r);setArchived(true);navigate('result');}} onDelete={id=>{setDeleted(runs.find(r=>r.id===id)||null);setRuns(p=>p.filter(r=>r.id!==id));}} canUndo={!!deleted} onUndo={()=>{if(deleted){setRuns(p=>[deleted,...p].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)));setDeleted(null);}}}/>
+    {autopilot.pending&&page!=='autopilot'&&<div className="notice" role="status">AI-автопилот готовит план. <button className="text-button" onClick={()=>navigate('autopilot')}>Посмотреть работу агентов</button>{autopilot.error&&<p>{autopilot.error}</p>}</div>}
+    {page==='autopilot'?<>{loading&&<Loading>Загружаем каталог для автопилота…</Loading>}{loadError&&<ErrorBox message={`Каталог недоступен. ${loadError}`} retry={()=>setReload(p=>p+1)}/>}<Autopilot {...autopilot} mock={mock} ready={!!scenario&&!busy} onStart={autopilot.start} onCancel={autopilot.cancel} onRefresh={autopilot.refresh} onHistory={()=>navigate('history')}/></>
+      :page==='history'?<History runs={runs} onStart={()=>navigate('decisions')} onOpen={r=>{setCurrent(r);setArchived(true);navigate('result');}} onDelete={id=>{setDeleted(runs.find(r=>r.id===id)||null);setRuns(p=>p.filter(r=>r.id!==id));}} canUndo={!!deleted} onUndo={()=>{if(deleted){setRuns(p=>[deleted,...p].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)));setDeleted(null);}}}/>
       :page==='result'&&visible?<>{archived&&<div className="notice">Сохранённый расчёт от {new Date(visible.createdAt).toLocaleString('ru-RU')}. Используется каталог на момент расчёта.</div>}<Result run={visible} onEdit={editResult} explaining={explainState[visible.id]?.loading||false} explainError={mock&&!visible.explanation?'В mock-режиме запрос объяснения недоступен.':explainState[visible.id]?.error||''} onExplain={()=>loadExplanation(visible)}/></>
       :loading?<Loading>Загружаем каталог и правила сценария…</Loading>
       :loadError?<section className="empty panel"><h1>Каталог пока недоступен</h1><ErrorBox message={loadError} retry={()=>setReload(p=>p+1)}/><p>Выбранный план сохранён. Для работы без сервера можно включить mock-каталог.</p><button className="secondary" onClick={()=>setMock(true)}>Открыть mock без расчёта</button></section>
-      :scenario?page==='overview'?<Overview scenario={scenario} onStart={()=>navigate('decisions')}/>:page==='decisions'?<Decisions scenario={scenario} plan={plan} name={name} onName={setName} onChange={changePlan} onRun={run} busy={busy} mock={mock} error={runError}/>:<Empty title="Рассчитайте текущий план" action={()=>navigate('decisions')}>После изменения решений нужен новый расчёт. Предыдущие успешные результаты доступны в истории.</Empty>:null}
+      :scenario?page==='overview'?<Overview scenario={scenario} onStart={()=>navigate('decisions')} onAutopilot={()=>navigate('autopilot')}/>:page==='decisions'?<Decisions scenario={scenario} plan={plan} name={name} onName={setName} onChange={changePlan} onRun={run} busy={busy} mock={mock} error={runError}/>:<Empty title="Рассчитайте текущий план" action={()=>navigate('decisions')}>После изменения решений нужен новый расчёт. Предыдущие успешные результаты доступны в истории.</Empty>:null}
   </Layout>;
 }

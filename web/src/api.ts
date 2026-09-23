@@ -1,5 +1,5 @@
-import type {Candidate, Decision, ExplainResponse, PlanAssessment, Scenario, SimulationResult, ValidationError} from './types';
-import {isDecision, isExplanation, isResult, isScenario} from './contract';
+import type {AutopilotRun, Candidate, Decision, ExplainResponse, PlanAssessment, Scenario, SimulationResult, ValidationError} from './types';
+import {isAutopilotRun, isDecision, isExplanation, isResult, isScenario} from './contract';
 import {planKey} from './validation';
 
 const messages: Record<string,string> = {
@@ -27,11 +27,13 @@ async function request(path: string, payload?:object, options:{signal?:AbortSign
   options.signal?.addEventListener('abort',abort,{once:true});
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch(path, {signal:controller.signal, ...(payload ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)} : {})});
+    const base = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+    const response = await fetch(`${base}${path}`, {signal:controller.signal, ...(payload ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)} : {})});
     const body = await response.json().catch(() => null);
     if (!response.ok && !(options.acceptValidation&&response.status===422)) {
       const errors = validationErrors(body?.validation_errors);
-      const message = errors.length ? errors.map(validationMessage).join(' ') : response.status >= 500 ? 'Сервер расчёта временно недоступен. Попробуйте ещё раз.' : `Не удалось выполнить запрос (HTTP ${response.status}).`;
+      const autopilotMessage = path.startsWith('/api/autopilot') ? response.status===429 ? 'Автопилот уже занят. Дождитесь окончания текущего запуска и повторите.' : response.status===503 ? 'Автопилот недоступен или отключён на сервере. Попробуйте позже.' : response.status===404 ? 'Запуск не найден или срок его хранения истёк. Создайте новый запуск.' : '' : '';
+      const message = autopilotMessage || (errors.length ? errors.map(validationMessage).join(' ') : response.status >= 500 ? 'Сервер расчёта временно недоступен. Попробуйте ещё раз.' : `Не удалось выполнить запрос (HTTP ${response.status}).`);
       throw new ApiError(message, response.status, errors);
     }
     return body;
@@ -71,3 +73,12 @@ export async function recommendBest(signal?:AbortSignal):Promise<Candidate> {
   if(!best || !Array.isArray(best.decisions) || !best.decisions.every(isDecision) || ![best.final_score,best.total_cost,best.remaining_budget,best.critical_after].every(Number.isFinite))throw new ApiError('Сервер вернул неполную рекомендацию. Повторите запрос.');
   return best;
 }
+
+async function autopilotRequest(path:string,payload?:object,signal?:AbortSignal):Promise<AutopilotRun> {
+  const body=await request(path,payload,{signal});
+  if(!isAutopilotRun(body))throw new ApiError('Автопилот вернул неполный или неподтверждённый результат. Текущий план сохранён.');
+  return body;
+}
+export const startAutopilot=(goal:string,signal?:AbortSignal)=>autopilotRequest('/api/autopilot',{goal},signal);
+export const getAutopilot=(id:string,signal?:AbortSignal)=>autopilotRequest(`/api/autopilot/${encodeURIComponent(id)}`,undefined,signal);
+export const cancelAutopilot=(id:string,signal?:AbortSignal)=>autopilotRequest(`/api/autopilot/${encodeURIComponent(id)}/cancel`,{},signal);

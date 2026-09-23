@@ -1,5 +1,5 @@
 import {it,expect,vi} from 'vitest';
-import {ApiError,assessPlan,explain,getScenario,recommendBest,simulate} from '../src/api';
+import {ApiError,assessPlan,explain,getAutopilot,getScenario,recommendBest,simulate,startAutopilot} from '../src/api';
 import result from './fixtures/golden-result.json';
 import explanation from './fixtures/golden-explain.json';
 import scenario from '../src/mock-scenario.json';
@@ -24,3 +24,15 @@ it('gets draft cost and validity from a 422 response, not a client sum',async()=
   vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response(answer,422)));expect(await assessPlan(answer.decisions)).toEqual(answer);
 });
 it('rejects assessment for a different plan',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response(result)));await expect(assessPlan([{measure_id:'M14'}])).rejects.toBeInstanceOf(ApiError);});
+it('uses an optional public API origin when configured',async()=>{
+  vi.stubEnv('VITE_API_BASE_URL','https://api.example.test/');
+  try {const fetch=vi.fn().mockResolvedValue(response(scenario));vi.stubGlobal('fetch',fetch);await getScenario();expect(fetch.mock.calls[0][0]).toBe('https://api.example.test/api/scenario');}
+  finally {vi.unstubAllEnvs();}
+});
+it.each([[429,'занят'],[503,'отключён'],[404,'истёк']] as const)('explains autopilot HTTP %s without retrying a paid start',async(status,message)=>{
+  const fetch=vi.fn().mockResolvedValue(response({error:'autopilot_error'},status));vi.stubGlobal('fetch',fetch);
+  await expect(startAutopilot('Цель')).rejects.toThrow(message);expect(fetch).toHaveBeenCalledTimes(1);
+});
+it('rejects unknown or incomplete autopilot responses',async()=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response({id:'one',status:'completed',result})));await expect(getAutopilot('one')).rejects.toThrow('неполный');
+});

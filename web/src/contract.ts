@@ -1,4 +1,4 @@
-import {categories, type Decision, type Explanation, type Scenario, type SimulationResult} from './types';
+import {autopilotStatuses, categories, type AutopilotRun, type Decision, type Explanation, type Scenario, type SimulationResult} from './types';
 import {planKey, stableJSON, validatePlan} from './validation';
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -36,6 +36,26 @@ export function isResult(v: unknown): v is SimulationResult {
 }
 export function isExplanation(v: unknown): v is Explanation {
   return obj(v) && (v.source === 'llm' || v.source === 'fallback') && str(v.text);
+}
+
+export function isAutopilotRun(v: unknown): v is AutopilotRun {
+  const text = (x: unknown) => typeof x === 'string';
+  const count = (x: unknown) => num(x) && Number.isInteger(x) && x >= 0;
+  const amount = (x: unknown) => num(x) && x >= 0;
+  const date = (x: unknown) => str(x) && Number.isFinite(Date.parse(x));
+  if (!obj(v) || !str(v.id) || !autopilotStatuses.includes(v.status as AutopilotRun['status']) || !['goal','explanation','message'].every(k => text(v[k])) || !date(v.created_at) || !date(v.updated_at)) return false;
+  if (!['estimated_cost_usd','budget_usd'].every(k => amount(v[k])) || !['iterations','evaluated','feasible'].every(k => count(v[k])) || typeof v.exhaustive !== 'boolean') return false;
+  if (!list(v.events) || !v.events.every(e => obj(e) && ['agent','stage','message'].every(k => str(e[k])) && count(e.iteration) && date(e.at))) return false;
+  if (!list(v.usage) || !v.usage.every(u => obj(u) && str(u.model) && count(u.input_tokens) && count(u.output_tokens) && amount(u.estimated_cost_usd) && typeof u.uncertain === 'boolean')) return false;
+  if (v.brief !== undefined) {
+    const b = v.brief;
+    if (!obj(b) || !text(b.summary) || !text(b.clarification) || !obj(b.goal) || !text(b.goal.objective)) return false;
+    if (b.goal.focus_district !== undefined && !text(b.goal.focus_district) || b.goal.budget_limit !== undefined && !amount(b.goal.budget_limit) || b.goal.max_critical != null && !count(b.goal.max_critical) || b.goal.protect_districts != null && !strings(b.goal.protect_districts)) return false;
+  }
+  if (v.result !== undefined && !isResult(v.result)) return false;
+  if (v.review !== undefined && (!obj(v.review) || typeof v.review.approved !== 'boolean' || !text(v.review.feedback) || !list(v.review.tradeoffs) || !v.review.tradeoffs.every(text))) return false;
+  // Only reviewed complete runs may become an automatically applied plan.
+  return v.status !== 'completed' || !!(v.result && obj(v.review) && v.review.approved === true && str(v.review.feedback) && str(v.explanation));
 }
 
 // Check identity/completeness, never recalculate a score or an effect.

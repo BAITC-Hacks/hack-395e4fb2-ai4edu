@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"hack-395e4fb2-ai4edu/internal/advisor"
+	"hack-395e4fb2-ai4edu/internal/autopilot"
 	"hack-395e4fb2-ai4edu/internal/explanation"
 	"hack-395e4fb2-ai4edu/internal/optimizer"
 	"hack-395e4fb2-ai4edu/internal/simulation"
@@ -21,6 +22,7 @@ func NewHandler() http.Handler {
 type Options struct {
 	Explainer  *explanation.Service
 	Advisor    *advisor.Service
+	Autopilot  *autopilot.Service
 	CORSOrigin string
 	// BestProvider must return immediately with ready=false until the search ends.
 	// Nil uses optimizer.ReadyBest; cmd/server starts the search in the background.
@@ -32,6 +34,7 @@ func NewHandlerWithOptions(options Options) http.Handler {
 		options.BestProvider = optimizer.ReadyBest
 	}
 	mux := http.NewServeMux()
+	registerAutopilot(mux, options.Autopilot)
 	// Bound concurrent multi-call workflows; do not queue expensive AI requests.
 	adviceSlots := make(chan struct{}, 2)
 	mux.HandleFunc("GET /api/scenario", func(w http.ResponseWriter, r *http.Request) {

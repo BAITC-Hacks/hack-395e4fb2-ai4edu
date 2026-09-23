@@ -5,6 +5,7 @@
 # Build output
 /bin/
 /server
+/.autopilot/
 *.exe
 *.test
 *.out

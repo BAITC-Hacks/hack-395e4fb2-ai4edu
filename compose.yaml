@@ -10,4 +10,10 @@ services:
     environment:
       # The container always listens on 8080; change HOST_PORT to remap.
       ADDR: ":8080"
+      AUTOPILOT_BUDGET_FILE: /state/usage.json
+    volumes:
+      - autopilot-state:/state
     restart: unless-stopped
+
+volumes:
+  autopilot-state:
