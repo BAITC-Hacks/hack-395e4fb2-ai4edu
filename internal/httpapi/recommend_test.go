@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"hack-395e4fb2-ai4edu/internal/optimizer"
@@ -19,6 +20,8 @@ func improveJSON(body string) string {
 }
 
 func TestRecommendBest(t *testing.T) {
+	// All HTTP success tests share the one process-wide search via sync.Once.
+	optimizer.Best()
 	handler := NewHandler()
 	want := call(handler, "POST", "/api/recommend", `{"mode":"best"}`)
 	if want.Code != http.StatusOK {
@@ -151,6 +154,7 @@ func TestRecommendBadRequests(t *testing.T) {
 }
 
 func TestRecommendDocumentedExamples(t *testing.T) {
+	optimizer.Best()
 	doc := apiDocument(t)
 	for _, name := range []string{"recommend-best", "recommend-improve"} {
 		t.Run(name, func(t *testing.T) {
@@ -160,5 +164,92 @@ func TestRecommendDocumentedExamples(t *testing.T) {
 				t.Fatalf("docs/api.md %s example is stale: %d %s", name, got.Code, got.Body.String())
 			}
 		})
+	}
+}
+
+func TestRecommendReadiness(t *testing.T) {
+	// A closed channel publishes the controlled provider result. No sleeps,
+	// polling or expensive search are needed to test the readiness transition.
+	ready := make(chan struct{})
+	var best optimizer.Candidate
+	handler := NewHandlerWithOptions(Options{BestProvider: func() (optimizer.Candidate, bool) {
+		select {
+		case <-ready:
+			return best, true
+		default:
+			return optimizer.Candidate{}, false
+		}
+	}})
+	wantError := "{\"valid\":false,\"validation_errors\":[{\"code\":\"not_ready\",\"message\":\"Optimal scenario is still being computed\"}]}\n"
+	if documented := documentedJSON(t, apiDocument(t), "recommend-not-ready-response"); !reflect.DeepEqual(jsonObject(t, documented), jsonObject(t, wantError)) {
+		t.Fatal("documented not_ready response is stale")
+	}
+	check := func(status int, body string) {
+		t.Helper()
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				got := call(handler, "POST", "/api/recommend", `{"mode":"best"}`)
+				if got.Code != status || got.Body.String() != body || got.Header().Get("Content-Type") != "application/json; charset=utf-8" {
+					t.Errorf("readiness response: %d %s, want %d %s", got.Code, got.Body.String(), status, body)
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	check(http.StatusServiceUnavailable, wantError)
+	for _, tc := range []struct{ method, path, body string }{
+		{"GET", "/api/scenario", ""},
+		{"POST", "/api/simulate", goldenJSON},
+		{"POST", "/api/explain", goldenJSON},
+		{"POST", "/api/recommend", improveJSON(goldenJSON)},
+	} {
+		if got := call(handler, tc.method, tc.path, tc.body); got.Code != http.StatusOK {
+			t.Errorf("%s must work before best is ready: %d %s", tc.path, got.Code, got.Body.String())
+		}
+	}
+	// Only the provider is faked; the candidate numbers still come from the engine.
+	var input simulation.Request
+	if err := json.Unmarshal([]byte(goldenJSON), &input); err != nil {
+		t.Fatal(err)
+	}
+	r := simulation.Simulate(input.Decisions)
+	best = optimizer.Candidate{Decisions: r.Decisions, FinalScore: *r.FinalScore, TotalCost: r.TotalCost, RemainingBudget: r.RemainingBudget, CriticalAfter: *r.CriticalAfter}
+	close(ready)
+	want, err := json.Marshal(struct {
+		Best optimizer.Candidate `json:"best"`
+	}{best})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(http.StatusOK, string(want)+"\n")
+}
+
+func TestOnlyValidBestConsultsProvider(t *testing.T) {
+	handler := NewHandlerWithOptions(Options{BestProvider: func() (optimizer.Candidate, bool) {
+		t.Error("this request must not consult or wait for the optimum")
+		return optimizer.Candidate{}, false
+	}})
+	for _, tc := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{"GET", "/api/scenario", "", 200},
+		{"POST", "/api/simulate", goldenJSON, 200},
+		{"POST", "/api/explain", goldenJSON, 200},
+		{"POST", "/api/recommend", improveJSON(goldenJSON), 200},
+		{"POST", "/api/recommend", `{"mode":"improve","decisions":[]}`, 422},
+		{"POST", "/api/recommend", `{"mode":"best","decisions":null}`, 400},
+		{"POST", "/api/recommend", `{"mode":"unknown"}`, 400},
+		{"POST", "/api/recommend", `{"mode":"best"}{}`, 400},
+		{"POST", "/api/recommend", strings.Repeat(" ", maxRequestBytes) + `{"mode":"best"}`, 413},
+		{"GET", "/api/recommend", "", 405},
+		{"OPTIONS", "/api/recommend", "", 204},
+	} {
+		if got := call(handler, tc.method, tc.path, tc.body); got.Code != tc.status {
+			t.Errorf("%s %s: %d, want %d", tc.method, tc.path, got.Code, tc.status)
+		}
 	}
 }

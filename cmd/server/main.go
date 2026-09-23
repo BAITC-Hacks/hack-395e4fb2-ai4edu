@@ -12,10 +12,12 @@ import (
 )
 
 func main() {
-	started := time.Now()
-	log.Print("Computing optimal scenario")
-	best := optimizer.Best()
-	log.Printf("Optimal scenario ready in %s: score=%v cost=%d", time.Since(started), best.FinalScore, best.TotalCost)
+	go func() {
+		started := time.Now()
+		log.Print("Computing optimal scenario")
+		best := optimizer.Best()
+		log.Printf("Optimal scenario ready in %s: score=%v cost=%d", time.Since(started), best.FinalScore, best.TotalCost)
+	}()
 	addr := os.Getenv("ADDR")
 	if addr == "" {
 		addr = ":8080"

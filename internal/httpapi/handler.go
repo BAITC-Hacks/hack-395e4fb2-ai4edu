@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"hack-395e4fb2-ai4edu/internal/explanation"
+	"hack-395e4fb2-ai4edu/internal/optimizer"
 	"hack-395e4fb2-ai4edu/internal/simulation"
 )
 
@@ -19,15 +20,23 @@ func NewHandler() http.Handler {
 type Options struct {
 	Explainer  *explanation.Service
 	CORSOrigin string
+	// BestProvider must return immediately with ready=false until the search ends.
+	// Nil uses optimizer.ReadyBest; cmd/server starts the search in the background.
+	BestProvider func() (best optimizer.Candidate, ready bool)
 }
 
 func NewHandlerWithOptions(options Options) http.Handler {
+	if options.BestProvider == nil {
+		options.BestProvider = optimizer.ReadyBest
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/scenario", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, simulation.DefaultScenario())
 	})
 	mux.HandleFunc("POST /api/simulate", simulate)
-	mux.HandleFunc("POST /api/recommend", recommend)
+	mux.HandleFunc("POST /api/recommend", func(w http.ResponseWriter, r *http.Request) {
+		recommend(w, r, options.BestProvider)
+	})
 	mux.HandleFunc("POST /api/explain", func(w http.ResponseWriter, r *http.Request) {
 		result, ok := readSimulation(w, r)
 		if !ok {

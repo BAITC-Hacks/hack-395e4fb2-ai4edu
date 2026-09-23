@@ -14,7 +14,7 @@ type recommendRequest struct {
 	Decisions json.RawMessage `json:"decisions"`
 }
 
-func recommend(w http.ResponseWriter, r *http.Request) {
+func recommend(w http.ResponseWriter, r *http.Request, bestProvider func() (optimizer.Candidate, bool)) {
 	request, ok := readRequest[recommendRequest](w, r)
 	if !ok {
 		return
@@ -25,9 +25,17 @@ func recommend(w http.ResponseWriter, r *http.Request) {
 			decodeError(w, errors.New("decisions must be omitted in best mode"))
 			return
 		}
+		best, ready := bestProvider()
+		if !ready {
+			writeJSON(w, http.StatusServiceUnavailable, struct {
+				Valid  bool                         `json:"valid"`
+				Errors []simulation.ValidationError `json:"validation_errors"`
+			}{false, []simulation.ValidationError{{Code: "not_ready", Message: "Optimal scenario is still being computed"}}})
+			return
+		}
 		writeJSON(w, http.StatusOK, struct {
 			Best optimizer.Candidate `json:"best"`
-		}{optimizer.Best()})
+		}{best})
 	case "improve":
 		var decisions []simulation.Decision
 		if request.Decisions != nil {

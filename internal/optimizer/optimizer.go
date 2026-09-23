@@ -3,6 +3,7 @@
 package optimizer
 
 import (
+	"runtime"
 	"sort"
 	"sync"
 
@@ -27,16 +28,29 @@ type Improvement struct {
 var (
 	bestOnce      sync.Once
 	bestDecisions []simulation.Decision
+	bestReady     = make(chan struct{})
 )
 
-// Best exhaustively searches once per process. The server calls this before
-// listening. Subsequent calls simulate the cached decisions to return fresh data
+// Best exhaustively searches once per process. The server calls this in the
+// background. Subsequent calls simulate the cached decisions to return fresh data
 // that callers can safely mutate without affecting the cache or other requests.
 func Best() Candidate {
 	bestOnce.Do(func() {
 		bestDecisions = searchBest(simulation.DefaultScenario()).Decisions
+		close(bestReady)
 	})
 	return candidate(simulation.Simulate(bestDecisions))
+}
+
+// ReadyBest never waits for the search. Closing bestReady publishes the cached
+// decisions to readers; the cache is immutable and each result owns its data.
+func ReadyBest() (Candidate, bool) {
+	select {
+	case <-bestReady:
+		return candidate(simulation.Simulate(bestDecisions)), true
+	default:
+		return Candidate{}, false
+	}
 }
 
 func candidate(result simulation.Result) Candidate {
@@ -85,16 +99,43 @@ func Improve(decisions []simulation.Decision) (simulation.Result, []Improvement)
 }
 
 func searchBest(s simulation.Scenario) Candidate {
+	return searchBestWithWorkers(s, runtime.NumCPU())
+}
+
+func searchBestWithWorkers(s simulation.Scenario, workers int) Candidate {
+	// Each job fixes the first measure index. Every scenario belongs to exactly
+	// one job, and every worker owns its traversal state and local winner.
+	jobs := make(chan int, len(s.Measures))
+	for first := 0; first <= len(s.Measures)-s.RequiredDecisions; first++ {
+		jobs <- first
+	}
+	close(jobs)
+	results := make(chan Candidate, workers)
+	for worker := 0; worker < workers; worker++ {
+		go func() {
+			var local Candidate
+			for first := range jobs {
+				visitScenariosStartingWith(s, first, func(decisions []simulation.Decision) {
+					result := simulation.Simulate(decisions)
+					if !result.Valid {
+						return
+					}
+					next := candidate(result)
+					if local.Decisions == nil || better(next, local) {
+						local = next
+					}
+				})
+			}
+			results <- local
+		}()
+	}
 	var best Candidate
-	visitScenarios(s, func(decisions []simulation.Decision) {
-		result := simulation.Simulate(decisions)
-		if !result.Valid {
-			return
+	for worker := 0; worker < workers; worker++ {
+		local := <-results
+		if local.Decisions != nil && (best.Decisions == nil || better(local, best)) {
+			best = local
 		}
-		if best.Decisions == nil || better(candidate(result), best) {
-			best = candidate(result)
-		}
-	})
+	}
 	return best
 }
 
@@ -102,6 +143,12 @@ func searchBest(s simulation.Scenario) Candidate {
 // permutations), then every legal district. Budget, category limits and catalog
 // incompatibilities prune partial scenarios before invoking the engine.
 func visitScenarios(s simulation.Scenario, visit func([]simulation.Decision)) {
+	for first := 0; first <= len(s.Measures)-s.RequiredDecisions; first++ {
+		visitScenariosStartingWith(s, first, visit)
+	}
+}
+
+func visitScenariosStartingWith(s simulation.Scenario, first int, visit func([]simulation.Decision)) {
 	decisions := make([]simulation.Decision, 0, s.RequiredDecisions)
 	categories := make(map[simulation.Category]int)
 	var walk func(int, int)
@@ -111,7 +158,11 @@ func visitScenarios(s simulation.Scenario, visit func([]simulation.Decision)) {
 			return
 		}
 		needed := s.RequiredDecisions - len(decisions)
-		for i := start; i <= len(s.Measures)-needed; i++ {
+		last := len(s.Measures) - needed
+		if len(decisions) == 0 {
+			last = first
+		}
+		for i := start; i <= last; i++ {
 			measure := s.Measures[i]
 			if cost+measure.Cost > s.Budget || categories[measure.Category] >= s.MaxMeasuresPerCategory {
 				continue
@@ -128,7 +179,7 @@ func visitScenarios(s simulation.Scenario, visit func([]simulation.Decision)) {
 			}
 		}
 	}
-	walk(0, 0)
+	walk(first, 0)
 }
 
 func incompatible(s simulation.Scenario, selected []simulation.Decision, next simulation.Decision) bool {

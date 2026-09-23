@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"runtime"
 	"sort"
 	"testing"
 
@@ -36,6 +37,16 @@ func TestBest(t *testing.T) {
 	if !actual.Valid || !reflect.DeepEqual(want, candidate(actual)) || want.FinalScore < 56.54307 {
 		t.Fatalf("invalid or sub-golden optimum: %+v", want)
 	}
+	nura := "nura"
+	expected := []simulation.Decision{
+		{MeasureID: "M14"}, {MeasureID: "M2"},
+		{MeasureID: "M3", DistrictID: &nura},
+		{MeasureID: "M8", DistrictID: &nura},
+		{MeasureID: "M9", DistrictID: &nura},
+	}
+	if !reflect.DeepEqual(want.Decisions, expected) || math.Abs(want.FinalScore-57.236735) > 1e-9 || want.TotalCost != 98 || want.CriticalAfter != 0 {
+		t.Fatalf("parallel search changed the expected optimum: %+v", want)
+	}
 	if _, improvements := Improve(want.Decisions); len(improvements) != 0 {
 		t.Fatalf("global optimum has better neighbors: %+v", improvements)
 	}
@@ -52,6 +63,10 @@ func TestBest(t *testing.T) {
 			t.Parallel()
 			if got := encoded(t, Best()); got != jsonWant {
 				t.Fatalf("Best changed: %s", got)
+			}
+			ready, ok := ReadyBest()
+			if !ok || encoded(t, ready) != jsonWant {
+				t.Fatal("published optimum differs from blocking Best")
 			}
 		})
 	}
@@ -113,6 +128,13 @@ func TestEnumerationMatchesUnprunedEngine(t *testing.T) {
 	}
 	if best := searchBest(s); !reflect.DeepEqual(best, oracleBest) {
 		t.Fatalf("best differs from exhaustive oracle: got %+v, want %+v", best, oracleBest)
+	}
+	// Vary worker counts on this reduced catalog, without repeating the expensive
+	// full-dataset search. Both serial and parallel reductions must match the oracle.
+	for _, workers := range []int{1, 2, 3, runtime.NumCPU()} {
+		if best := searchBestWithWorkers(s, workers); !reflect.DeepEqual(best, oracleBest) {
+			t.Fatalf("%d workers changed the winner: %+v", workers, best)
+		}
 	}
 	// Traversal order must not affect score ties or the winning scenario.
 	for i, j := 0, len(s.Measures)-1; i < j; i, j = i+1, j-1 {
