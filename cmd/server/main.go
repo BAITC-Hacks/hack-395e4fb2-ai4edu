@@ -8,9 +8,16 @@ import (
 
 	"hack-395e4fb2-ai4edu/internal/explanation"
 	"hack-395e4fb2-ai4edu/internal/httpapi"
+	"hack-395e4fb2-ai4edu/internal/optimizer"
 )
 
 func main() {
+	go func() {
+		started := time.Now()
+		log.Print("Computing optimal scenario")
+		best := optimizer.Best()
+		log.Printf("Optimal scenario ready in %s: score=%v cost=%d", time.Since(started), best.FinalScore, best.TotalCost)
+	}()
 	addr := os.Getenv("ADDR")
 	if addr == "" {
 		addr = ":8080"
