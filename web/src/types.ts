@@ -6,6 +6,7 @@ export type Effects = Partial<Indicators>;
 export interface District { id: string; name: string; population_share: number; indicators: Indicators }
 export interface Measure { id: string; name: string; category: Category; scope: 'City'|'District'; cost: number; lag: number; effects: Effects }
 export interface Decision { measure_id: string; district_id?: string }
+export interface MeasureFocus { districtId: string; metric: Metric }
 export interface Synergy { measure_ids: [string, string]; district_measure_id: string; effects: Effects }
 export interface Scenario {
   budget: number; required_decisions: number; max_measures_per_category: number; horizon_quarters: number;
@@ -16,8 +17,10 @@ export interface Scenario {
   incompatibilities: { measure_ids: [string, string]; same_district_only: boolean }[];
 }
 export interface ValidationError { code: string; message: string; measure_ids?: string[] }
-export interface PlanAssessment { valid: boolean; total_cost: number; remaining_budget: number; decisions: Decision[]; validation_errors?: ValidationError[] }
+export interface PlanAssessment { valid: boolean; total_cost: number; remaining_budget: number; decisions: Decision[]; validation_errors?: ValidationError[]; critical_after?:number }
 export interface Candidate { decisions: Decision[]; final_score: number; total_cost: number; remaining_budget: number; critical_after: number }
+export interface Improvement extends Candidate { score_delta:number }
+export interface ImproveResponse { current_score:number; improvements:Improvement[] }
 export interface DistrictResult {
   district_id: string; name: string; population_share: number; before: Indicators; after: Indicators;
   score_before: number; score_after: number;

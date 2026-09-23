@@ -33,9 +33,9 @@ export function Recommendation({scenario,mock,busy,onApply}:{scenario:Scenario;m
     }
     await poll();
   }
-  return <section className="panel recommendation"><h2>Лучший план по модели</h2><p className="help">Go перебирает допустимые наборы и назначения районов. Можно изучить рекомендацию и применить её к своему плану.</p>
+  return <section className="panel recommendation"><h2>Лучший план по модели</h2><p className="help">Оптимизатор ищет лучший набор решений по модели города. Это расчётная рекомендация, а не ответ ИИ. Замена плана — только по вашему выбору.</p>
     {loading?<><Loading>Считается…</Loading><p className="help">Оптимизатор ещё работает. Запрос повторяется автоматически; ожидание можно отменить.</p><button className="secondary" onClick={cancel}>Отменить ожидание</button></>:<button className="secondary" disabled={mock||busy} onClick={load}>Показать лучший план</button>}
-    {mock&&<p className="help">В mock-режиме рекомендации Go недоступны.</p>}{busy&&<p className="help">Дождитесь завершения расчёта.</p>}
+    {mock&&<p className="help">В учебном режиме (mock) рекомендации оптимизатора недоступны.</p>}{busy&&<p className="help">Дождитесь завершения расчёта.</p>}
     {error&&<ErrorBox message={error} retry={load}/>}
     {best&&<div className="recommendation-result"><p><strong>{format(best.final_score)} Score</strong> · стоимость {best.total_cost} · осталось {best.remaining_budget} · критических значений {best.critical_after}</p><ul>{best.decisions.map(d=><li key={d.measure_id}>{d.measure_id} · {scenario.measures.find(m=>m.id===d.measure_id)?.name} — {d.district_id?scenario.districts.find(x=>x.id===d.district_id)?.name:'Весь город'}</li>)}</ul><button className="secondary" disabled={busy} onClick={()=>{if(!busy)onApply(best.decisions.map(d=>({...d})));}}>Заменить текущий план рекомендацией</button><p className="help">Будут заменены все пять решений. Полные показатели появятся после запуска.</p></div>}
   </section>;

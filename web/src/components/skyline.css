@@ -1,0 +1,35 @@
+/* Static decorative counterpart to the interactive city. No separate motion timeline. */
+.city-hero > .astana-skyline {
+  position: absolute;
+  inset: auto -14px 0 auto;
+  width: 78%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+/* Keep the copy and primary action on an opaque, quiet surface. */
+.city-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, #e8eedf 0%, #e8eedf 31%, #e8eedfe8 43%, #e8eedf00 68%);
+}
+
+@media (max-width: 1250px) {
+  .city-hero > .astana-skyline { width: 90%; opacity: .8; }
+  .city-hero::after { background: linear-gradient(90deg, #e8eedf 0%, #e8eedfe8 39%, #e8eedf80 64%, #e8eedf00 100%); }
+}
+
+@media (max-width: 950px) {
+  .city-hero > .astana-skyline { width: 100%; height: 84%; opacity: .42; right: -22px; }
+  .city-hero::after { background: linear-gradient(90deg, #e8eedf 0%, #e8eedfe8 35%, #e8eedf30 100%); }
+}
+
+@media (max-width: 700px) {
+  .city-hero > .astana-skyline { width: 122%; height: 82%; right: -25%; opacity: .26; }
+  .city-hero::after { background: linear-gradient(90deg, #e8eedf 0%, #e8eedfe0 43%, #e8eedf60 100%); }
+}

@@ -35,3 +35,19 @@ assert.ok(best,'Optimizer did not finish within 120 seconds');
 const verifiedBest=await post('/api/simulate',best.decisions);assert.equal(verifiedBest.status,200);
 for(const field of ['final_score','total_cost','remaining_budget','critical_after'])assert.equal(best[field],verifiedBest.body[field]);
 console.log(`PASS live best: score=${best.final_score}, cost=${best.total_cost}; independently verified by Go simulate`);
+async function improve(decisions){
+  const response=await fetch(base+'/api/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'improve',decisions})});
+  return {status:response.status,body:await response.json()};
+}
+const improved=await improve(golden);
+assert.equal(improved.status,200);assert.equal(improved.body.current_score,result.body.final_score);
+assert.ok(improved.body.improvements.length>0&&improved.body.improvements.length<=3);
+for(const candidate of improved.body.improvements){
+  const verified=await post('/api/simulate',candidate.decisions);assert.equal(verified.status,200);
+  for(const field of ['final_score','total_cost','remaining_budget','critical_after'])assert.equal(candidate[field],verified.body[field]);
+  assert.equal(candidate.score_delta,candidate.final_score-improved.body.current_score);assert.ok(candidate.score_delta>0);
+  assert.equal(candidate.decisions.filter(d=>!golden.some(old=>old.measure_id===d.measure_id&&old.district_id===d.district_id)).length,1);
+}
+const empty=await improve(best.decisions);assert.equal(empty.status,200);assert.deepEqual(empty.body.improvements,[]);
+const invalidImprovement=await improve(golden.slice(1));assert.equal(invalidImprovement.status,422);assert.ok(invalidImprovement.body.validation_errors.some(e=>e.code==='decision_count'));
+console.log('PASS live improve: every candidate rechecked by Go, one replacement, empty recommendations and 422');

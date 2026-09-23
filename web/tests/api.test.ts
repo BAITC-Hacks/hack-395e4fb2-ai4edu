@@ -1,5 +1,6 @@
 import {it,expect,vi} from 'vitest';
-import {ApiError,assessPlan,explain,getScenario,recommendBest,simulate} from '../src/api';
+import {ApiError,assessPlan,explain,getScenario,recommendBest,recommendImprove,simulate} from '../src/api';
+import improved from './fixtures/golden-improve.json';
 import result from './fixtures/golden-result.json';
 import explanation from './fixtures/golden-explain.json';
 import scenario from '../src/mock-scenario.json';
@@ -24,3 +25,13 @@ it('gets draft cost and validity from a 422 response, not a client sum',async()=
   vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response(answer,422)));expect(await assessPlan(answer.decisions)).toEqual(answer);
 });
 it('rejects assessment for a different plan',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response(result)));await expect(assessPlan([{measure_id:'M14'}])).rejects.toBeInstanceOf(ApiError);});
+it('uses the relative improve endpoint and omits district_id on city decisions',async()=>{
+  const fetch=vi.fn().mockResolvedValue(response(improved));vi.stubGlobal('fetch',fetch);
+  expect(await recommendImprove(result.decisions)).toEqual(improved);
+  expect(fetch.mock.calls[0][0]).toBe('/api/recommend');
+  const payload=JSON.parse(fetch.mock.calls[0][1].body);expect(payload).toEqual({mode:'improve',decisions:result.decisions});
+  expect(payload.decisions.find((d:{measure_id:string})=>d.measure_id==='M12')).not.toHaveProperty('district_id');
+});
+it.each([{}, {current_score:42,improvements:[null]}, {current_score:42,improvements:[{...improved.improvements[0],score_delta:0}]}, {current_score:42,improvements:[{...improved.improvements[0],critical_after:'0'}]}])('rejects incomplete improve responses: %j',async body=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(response(body)));await expect(recommendImprove(result.decisions)).rejects.toThrow('неполную рекомендацию');
+});
