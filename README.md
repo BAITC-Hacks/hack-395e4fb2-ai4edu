@@ -20,6 +20,7 @@ make demo-explain           # тот же сценарий → /api/explain
 
 Без Docker: `make run` (нужен Go 1.22+, `.env` подхватывается автоматически).
 `make help` показывает все цели, `make check` запускает gofmt, vet, тесты и race.
+Best (`POST /api/recommend`, `mode=best`) доступен через несколько секунд после старта; до готовности возвращается 503 `not_ready`, остальные запросы работают сразу.
 В Docker контейнер всегда слушает 8080; внешний порт меняется через `HOST_PORT`.
 
 ### Архитектура
@@ -87,6 +88,9 @@ Fallback описывает крупнейшие улучшения и сине�
 Разрешены GET/POST/OPTIONS и Content-Type, без credentials.
 
 ### API
+
+Полный контракт для фронтенда и AI-участника, схемы и реальные примеры:
+[docs/api.md](docs/api.md).
 
 `GET /api/scenario` возвращает районы с исходными показателями, мероприятия,
 их `name`, таблицы `indicator_names` и `category_names`, веса, бюджет, горизонт,
