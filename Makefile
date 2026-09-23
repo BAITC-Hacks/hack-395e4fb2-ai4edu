@@ -54,5 +54,10 @@ demo: ## Send the golden scenario to /api/simulate (server must be running)
 demo-explain: ## Send the golden scenario to /api/explain (server must be running)
 	@curl -sS localhost:$(PORT)/api/explain -H 'Content-Type: application/json' -d '$(GOLDEN)'; echo
 
+demo-advise: ## Ask the AI advisor to test alternatives and review the result
+	@curl -sS localhost:$(PORT)/api/advise -H 'Content-Type: application/json' -d '$(GOLDEN)'; echo
+
+.PHONY: demo-advise
+
 clean: ## Remove build output
 	rm -rf bin

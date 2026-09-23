@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"hack-395e4fb2-ai4edu/internal/advisor"
 	"hack-395e4fb2-ai4edu/internal/explanation"
 	"hack-395e4fb2-ai4edu/internal/simulation"
 )
@@ -18,11 +19,14 @@ func NewHandler() http.Handler {
 
 type Options struct {
 	Explainer  *explanation.Service
+	Advisor    *advisor.Service
 	CORSOrigin string
 }
 
 func NewHandlerWithOptions(options Options) http.Handler {
 	mux := http.NewServeMux()
+	// Bound concurrent multi-call workflows; do not queue expensive AI requests.
+	adviceSlots := make(chan struct{}, 2)
 	mux.HandleFunc("GET /api/scenario", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, simulation.DefaultScenario())
 	})
@@ -36,6 +40,21 @@ func NewHandlerWithOptions(options Options) http.Handler {
 			Result      simulation.Result       `json:"result"`
 			Explanation explanation.Explanation `json:"explanation"`
 		}{result, options.Explainer.Explain(r.Context(), result)})
+	})
+	mux.HandleFunc("POST /api/advise", func(w http.ResponseWriter, r *http.Request) {
+		result, ok := readSimulation(w, r)
+		if !ok {
+			return
+		}
+		select {
+		case adviceSlots <- struct{}{}:
+			defer func() { <-adviceSlots }()
+		default:
+			w.Header().Set("Retry-After", "5")
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "advisor_busy"})
+			return
+		}
+		writeJSON(w, http.StatusOK, options.Advisor.Advise(r.Context(), result))
 	})
 	return cors(mux, options.CORSOrigin)
 }

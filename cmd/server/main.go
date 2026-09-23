@@ -6,24 +6,30 @@ import (
 	"os"
 	"time"
 
+	"hack-395e4fb2-ai4edu/internal/advisor"
 	"hack-395e4fb2-ai4edu/internal/explanation"
 	"hack-395e4fb2-ai4edu/internal/httpapi"
 )
 
 func main() {
+	provider, reviewer, err := explanation.NewProvidersFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	addr := os.Getenv("ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
 	server := &http.Server{
 		Addr: addr, Handler: httpapi.NewHandlerWithOptions(httpapi.Options{
-			Explainer:  explanation.New(explanation.NewOpenAIFromEnv()),
+			Explainer:  explanation.New(provider),
+			Advisor:    advisor.New(advisor.NewPlannerFromEnv(), reviewer),
 			CORSOrigin: os.Getenv("CORS_ORIGIN"),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		// Covers the request read (10s), LLM deadline (10s), and fallback write.
-		WriteTimeout: 25 * time.Second,
+		// Covers request read (10s), advisor deadline (45s), and response write.
+		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 	log.Printf("Akim API listening on %s", addr)

@@ -15,6 +15,8 @@ import (
 const defaultModel = "gpt-4.1-mini"
 const maxResponseBytes = 1 << 20
 
+var ErrRefused = errors.New("explanation provider refused")
+
 const instructions = `Ты объясняешь результат учебного симулятора «Аким на 5 часов» на русском языке.
 Входной JSON содержит уже рассчитанный в Go result, названия выбранных мер и показателей.
 Не рассчитывай и не пересчитывай Score, дельты, эффекты, проценты, суммы или другие числа.
@@ -99,7 +101,7 @@ func (c *openAIClient) Generate(ctx context.Context, input json.RawMessage) (str
 		}
 		for _, content := range item.Content {
 			if content.Type == "refusal" {
-				return "", errors.New("explanation provider refused")
+				return "", ErrRefused
 			}
 			if content.Type == "output_text" && strings.TrimSpace(content.Text) != "" {
 				parts = append(parts, strings.TrimSpace(content.Text))
