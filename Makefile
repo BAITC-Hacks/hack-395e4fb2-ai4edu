@@ -8,7 +8,7 @@ BIN  := bin/server
 GOLDEN := {"decisions":[{"measure_id":"M7","district_id":"nura"},{"measure_id":"M8","district_id":"nura"},{"measure_id":"M10","district_id":"nura"},{"measure_id":"M12"},{"measure_id":"M5","district_id":"saryarka"}]}
 
 .DEFAULT_GOAL := help
-.PHONY: help run build web-install web-dev web-build test race vet fmt fmt-check cover check up down logs demo demo-explain clean
+.PHONY: help run build web-install web-dev web-build verify test race vet fmt fmt-check cover check up down logs demo demo-explain clean
 
 help: ## Show available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -47,6 +47,9 @@ cover: ## Show test coverage per package
 	go test -cover ./...
 
 check: fmt-check vet test race ## Run every check before a demo or commit
+
+verify: ## Recompute reference scores and the optimum in Python, without Go code
+	python3 scripts/verify_scores.py --optimum
 
 up: ## Build and start the API in Docker
 	docker compose up --build -d
