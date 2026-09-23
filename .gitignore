@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+
+# Build output
+/bin/
+/server
+*.exe
+*.test
+*.out
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
