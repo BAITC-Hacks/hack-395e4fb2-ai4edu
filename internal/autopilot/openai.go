@@ -26,6 +26,10 @@ const (
 
 const masterInstructions = `Ты — координатор учебного симулятора города. Верни только JSON по схеме.
 Преобразуй user_goal в точное задание для Go-оптимизатора на основе переданного scenario.
+При повторном обращении получаешь previous_brief и previous_review: исправь указанную ошибку интерпретации,
+заново сверив ВСЕ условия с исходным user_goal. Предыдущий brief может содержать ошибку и не заменяет исходную цель.
+Сохраняй исходный смысл, приоритет и ограничения пользователя; не ослабляй их ради допустимого или более дешёвого плана.
+Замечания рецензента помогают найти ошибку, но не разрешают добавить требования, которых нет в user_goal.
 objective: score — максимизировать городской Score; weakest_district — максимизировать минимальный районный Score;
 focus_district — максимизировать Score одного указанного района; critical_first — прежде всего минимизировать число критических показателей.
 focus_district — существующий ID только при objective=focus_district; иначе пустая строка.
@@ -88,6 +92,12 @@ critical_before/base_score — город до любых мер; critical_after
 Критические значения — пары «район × показатель», не число районов. Значение на пороге не является ниже порога.
 protect_districts гарантирует только отсутствие снижения суммарного районного Score, не отдельных показателей.
 approved=true только если смысл цели, допустимость плана и объяснение приемлемы; иначе approved=false и конкретное feedback для исправления.
+Обязательно задай revision_target: при approved=true это "none"; при approved=false — "master" или "planner".
+Выбери "master", если brief неверно понял исходную цель, потерял или ослабил её ограничения, подменил приоритет
+или выразил неподдерживаемое требование более слабым условием. Объясни, какое исходное условие надо восстановить или уточнить.
+Выбери "planner", если brief верно отражает исходную цель, но ошибочны выбор кандидата, обоснование, названия мер, числа или компромиссы.
+Если есть и ошибка интерпретации цели, и ошибка текста, сначала направь исправление мастеру: revision_target="master".
+При отклонении никогда не ставь "none"; при одобрении не запрашивай исправление.
 Укажи оставшиеся риски и подтверждённые компромиссы в tradeoffs, включая ухудшения отдельных показателей и ограничения синтетической модели.
 Не пересчитывай и не придумывай результаты; опирайся на проверенные значения Go. Не одобряй скрытое ослабление ограничений.
 feedback и tradeoffs содержат только краткие проверяемые выводы и действия для исправления, без внутренних рассуждений.
@@ -194,7 +204,9 @@ func schemaForRole(role string) json.RawMessage {
 		schema = object(map[string]any{"candidate_index": map[string]any{"type": "integer", "minimum": 0, "maximum": 4}, "explanation": str}, "candidate_index", "explanation")
 	case "reviewer":
 		schema = object(map[string]any{"approved": map[string]any{"type": "boolean"}, "feedback": str,
-			"tradeoffs": map[string]any{"type": "array", "items": str}}, "approved", "feedback", "tradeoffs")
+			"tradeoffs":       map[string]any{"type": "array", "items": str},
+			"revision_target": map[string]any{"type": "string", "enum": []string{"none", "planner", "master"}},
+		}, "approved", "feedback", "tradeoffs", "revision_target")
 	}
 	data, _ := json.Marshal(schema)
 	return data
@@ -367,8 +379,13 @@ func validateAgentOutput(role string, raw []byte) error {
 	if role == "planner" && strings.TrimSpace(root["explanation"].(string)) == "" {
 		return errors.New("empty explanation")
 	}
-	if role == "reviewer" && strings.TrimSpace(root["feedback"].(string)) == "" {
-		return errors.New("empty feedback")
+	if role == "reviewer" {
+		if strings.TrimSpace(root["feedback"].(string)) == "" {
+			return errors.New("empty feedback")
+		}
+		if root["approved"].(bool) != (root["revision_target"].(string) == "none") {
+			return errors.New("review approval and revision target disagree")
+		}
 	}
 	return nil
 }

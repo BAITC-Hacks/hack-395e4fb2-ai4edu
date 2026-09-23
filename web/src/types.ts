@@ -45,11 +45,17 @@ export interface AutopilotGoal {
   objective: string; focus_district?: string; budget_limit?: number;
   max_critical?: number|null; protect_districts?: string[]|null;
 }
+export type AutopilotObjective = 'score'|'weakest_district'|'focus_district'|'critical_first';
+export interface OptimalityProof {
+  proven: boolean; objective: AutopilotObjective;
+  best_value: number; selected_value: number; gap: number; score_ceiling?: number;
+}
 export interface AutopilotRun {
   id: string; status: AutopilotStatus; goal: string;
   brief?: {goal: AutopilotGoal; summary: string; clarification: string};
   result?: SimulationResult; explanation: string;
-  review?: {approved: boolean; feedback: string; tradeoffs: string[]};
+  review?: {approved: boolean; feedback: string; tradeoffs: string[]; revision_target?: 'none'|'planner'|'master'};
+  optimality?: OptimalityProof;
   events: {agent: string; stage: string; message: string; iteration: number; at: string}[];
   usage: {model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number; uncertain: boolean}[];
   estimated_cost_usd: number; budget_usd: number; iterations: number;

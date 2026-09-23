@@ -27,9 +27,10 @@ type Proposal struct {
 }
 
 type Review struct {
-	Approved  bool     `json:"approved"`
-	Feedback  string   `json:"feedback"`
-	Tradeoffs []string `json:"tradeoffs"`
+	Approved       bool     `json:"approved"`
+	Feedback       string   `json:"feedback"`
+	Tradeoffs      []string `json:"tradeoffs"`
+	RevisionTarget string   `json:"revision_target"`
 }
 
 type Usage struct {
@@ -63,6 +64,7 @@ type Run struct {
 	Result           *simulation.Result `json:"result,omitempty"`
 	Explanation      string             `json:"explanation"`
 	Review           *Review            `json:"review,omitempty"`
+	Optimality       *Optimality        `json:"optimality,omitempty"`
 	Events           []Event            `json:"events"`
 	Usage            []Usage            `json:"usage"`
 	EstimatedCostUSD float64            `json:"estimated_cost_usd"`

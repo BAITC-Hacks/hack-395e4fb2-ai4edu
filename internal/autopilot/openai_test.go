@@ -33,7 +33,7 @@ func configuredAgents(t *testing.T) *openAIAgents {
 
 const briefJSON = `{"goal":{"objective":"score","focus_district":"","budget_limit":100,"max_critical":null,"protect_districts":[]},"summary":"Повысить Score","clarification":""}`
 const proposalJSON = `{"candidate_index":0,"explanation":"Проверенный вариант улучшает Score; ограничения модели сохраняются."}`
-const reviewJSON = `{"approved":true,"feedback":"План соответствует цели и расчётам.","tradeoffs":["Синтетические данные."]}`
+const reviewJSON = `{"approved":true,"feedback":"План соответствует цели и расчётам.","tradeoffs":["Синтетические данные."],"revision_target":"none"}`
 
 func agentResponse(status, text string) string {
 	raw, _ := json.Marshal(map[string]any{
@@ -253,10 +253,120 @@ func TestAgentsGoalAndVerdictValidation(t *testing.T) {
 			t.Fatal("invalid proposal accepted")
 		}
 	}
-	for _, raw := range []string{`{"approved":true,"feedback":"","tradeoffs":[]}`, `{"approved":null,"feedback":"ok","tradeoffs":[]}`, `{"approved":true,"feedback":"ok","tradeoffs":null}`, `{"approved":true,"feedback":"ok"}`} {
+	for _, raw := range []string{`{"approved":true,"feedback":"","tradeoffs":[],"revision_target":"none"}`, `{"approved":null,"feedback":"ok","tradeoffs":[],"revision_target":"none"}`, `{"approved":true,"feedback":"ok","tradeoffs":null,"revision_target":"none"}`, `{"approved":true,"feedback":"ok","revision_target":"none"}`} {
 		if validateAgentOutput("reviewer", []byte(raw)) == nil {
 			t.Fatal("invalid review accepted")
 		}
+	}
+}
+
+func TestAgentsReviewRouting(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		approved   bool
+		target     any
+		omitTarget bool
+		valid      bool
+	}{
+		{"approved without revision", true, "none", false, true},
+		{"rejected rationale to planner", false, "planner", false, true},
+		{"rejected interpretation to master", false, "master", false, true},
+		{"approved cannot revise planner", true, "planner", false, false},
+		{"approved cannot revise master", true, "master", false, false},
+		{"rejection needs destination", false, "none", false, false},
+		{"unknown destination", false, "simulator", false, false},
+		{"blank destination", false, "", false, false},
+		{"null destination", false, nil, false, false},
+		{"missing destination", true, nil, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := configuredAgents(t)
+			verdict := map[string]any{"approved": tc.approved, "feedback": "Проверяемый вывод.", "tradeoffs": []string{}}
+			if !tc.omitTarget {
+				verdict["revision_target"] = tc.target
+			}
+			raw, _ := json.Marshal(verdict)
+			client.http.Transport = agentTransport(func(r *http.Request) (*http.Response, error) {
+				var body struct {
+					Instructions string `json:"instructions"`
+					Text         struct {
+						Format struct {
+							Schema map[string]any `json:"schema"`
+						} `json:"format"`
+					} `json:"text"`
+				}
+				if json.NewDecoder(r.Body).Decode(&body) != nil {
+					t.Fatal("cannot decode review request")
+				}
+				for _, instruction := range []string{`Выбери "master"`, `Выбери "planner"`, `сначала направь исправление мастеру`} {
+					if !strings.Contains(body.Instructions, instruction) {
+						t.Fatalf("routing instruction missing: %s", instruction)
+					}
+				}
+				properties := body.Text.Format.Schema["properties"].(map[string]any)
+				targetSchema, ok := properties["revision_target"].(map[string]any)
+				if !ok || targetSchema["type"] != "string" {
+					t.Fatal("review destination missing from provider schema")
+				}
+				return agentHTTPResponse(200, agentResponse("completed", string(raw))), nil
+			})
+			var review Review
+			usage, err := client.Call(context.Background(), "reviewer", json.RawMessage(`{}`), &review)
+			if (err == nil) != tc.valid {
+				t.Fatalf("routing accepted=%v want=%v, error=%v", err == nil, tc.valid, err)
+			}
+			if usage.Uncertain || usage.InputTokens != 1000 || usage.EstimatedCostUSD <= 0 {
+				t.Fatal("invalid verdict lost known billed usage")
+			}
+			if !tc.valid && review.Feedback != "" {
+				t.Fatal("invalid routing mutated destination")
+			}
+			if tc.valid {
+				encoded, _ := json.Marshal(review)
+				var actual map[string]any
+				_ = json.Unmarshal(encoded, &actual)
+				if actual["revision_target"] != tc.target {
+					t.Fatal("routing destination lost during decoding")
+				}
+			}
+		})
+	}
+}
+
+func TestAgentsMasterRevisionKeepsOriginalGoalAndFeedback(t *testing.T) {
+	client := configuredAgents(t)
+	var previous Brief
+	if json.Unmarshal([]byte(briefJSON), &previous) != nil {
+		t.Fatal("invalid test brief")
+	}
+	input, _ := json.Marshal(map[string]any{
+		"user_goal":       "Максимизируй городской Score и устрани все критические показатели.",
+		"scenario":        simulation.DefaultScenario(),
+		"previous_brief":  previous,
+		"previous_review": map[string]any{"approved": false, "feedback": "В предыдущей формализации потеряно требование устранить все критические показатели. Верни его как max_critical=0.", "revision_target": "master", "tradeoffs": []string{}},
+	})
+	client.http.Transport = agentTransport(func(r *http.Request) (*http.Response, error) {
+		var body struct {
+			Instructions string `json:"instructions"`
+			Input        string `json:"input"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Input != string(input) {
+			t.Fatal("original goal or master revision context was discarded")
+		}
+		for _, instruction := range []string{"previous_brief и previous_review", "исходным user_goal", "не ослабляй их", "clarification конкретным вопросом"} {
+			if !strings.Contains(body.Instructions, instruction) {
+				t.Fatalf("master revision instruction missing: %s", instruction)
+			}
+		}
+		fixed := strings.Replace(briefJSON, `"max_critical":null`, `"max_critical":0`, 1)
+		return agentHTTPResponse(200, agentResponse("completed", fixed)), nil
+	})
+	var revised Brief
+	if _, err := client.Call(context.Background(), "master", input, &revised); err != nil {
+		t.Fatal(err)
+	}
+	if revised.Goal.MaxCritical == nil || *revised.Goal.MaxCritical != 0 || revised.Goal.BudgetLimit != 100 || revised.Clarification != "" {
+		t.Fatal("revised structured goal lost constraints")
 	}
 }
 

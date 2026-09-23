@@ -54,6 +54,14 @@ export function isAutopilotRun(v: unknown): v is AutopilotRun {
   }
   if (v.result !== undefined && !isResult(v.result)) return false;
   if (v.review !== undefined && (!obj(v.review) || typeof v.review.approved !== 'boolean' || !text(v.review.feedback) || !list(v.review.tradeoffs) || !v.review.tradeoffs.every(text))) return false;
+  if (obj(v.review) && v.review.revision_target !== undefined && !['none','planner','master'].includes(v.review.revision_target as string)) return false;
+  if (v.optimality !== undefined) {
+    const p=v.optimality;
+    if (!obj(p) || typeof p.proven !== 'boolean' || !['score','weakest_district','focus_district','critical_first'].includes(p.objective as string) || !num(p.best_value) || !num(p.selected_value) || !amount(p.gap)) return false;
+    if (p.objective==='critical_first' && ![p.best_value,p.selected_value,p.gap].every(count)) return false;
+    if (p.proven && (v.exhaustive!==true || p.gap!==0)) return false;
+    if (p.score_ceiling!==undefined && (!num(p.score_ceiling) || p.objective!=='score' || v.exhaustive!==true)) return false;
+  }
   // Only reviewed complete runs may become an automatically applied plan.
   return v.status !== 'completed' || !!(v.result && obj(v.review) && v.review.approved === true && str(v.review.feedback) && str(v.explanation));
 }

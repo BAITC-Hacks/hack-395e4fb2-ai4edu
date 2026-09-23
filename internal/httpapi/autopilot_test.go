@@ -28,7 +28,7 @@ func (a autopilotAgents) Call(ctx context.Context, role string, _ json.RawMessag
 	case "planner":
 		*out.(*autopilot.Proposal) = autopilot.Proposal{CandidateIndex: 0, Explanation: "Объяснение проверенного плана."}
 	case "reviewer":
-		*out.(*autopilot.Review) = autopilot.Review{Approved: true, Feedback: "Проверка пройдена.", Tradeoffs: []string{}}
+		*out.(*autopilot.Review) = autopilot.Review{Approved: true, RevisionTarget: "none", Feedback: "Проверка пройдена.", Tradeoffs: []string{}}
 	}
 	return autopilot.Usage{InputTokens: 1, OutputTokens: 1, EstimatedCostUSD: .0001}, nil
 }

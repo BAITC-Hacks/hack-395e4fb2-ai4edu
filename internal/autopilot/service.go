@@ -273,60 +273,9 @@ func (s *Service) execute(ctx context.Context, id string) {
 	}()
 	s.update(id, func(r *Run) { r.Status = "running" })
 	run, _ := s.Get(id)
-	s.event(id, "master", "interpreting", "Мастер переводит цель в ограничения для поиска.", 0)
 	var brief Brief
-	if err := s.call(ctx, id, "master", map[string]any{"user_goal": run.Goal, "scenario": simulation.DefaultScenario()}, &brief); err != nil {
-		s.fail(ctx, id, err)
-		return
-	}
-	s.update(id, func(r *Run) { r.Brief = &brief })
-	if strings.TrimSpace(brief.Clarification) != "" {
-		s.finish(id, "needs_clarification", brief.Clarification)
-		return
-	}
-	if err := optimizer.ValidateGoal(brief.Goal); err != nil {
-		s.finish(id, "needs_clarification", "Не удалось однозначно перевести цель в поддерживаемые ограничения. Укажите бюджет, приоритетный район или цель повышения Score.")
-		return
-	}
-	s.event(id, "master", "delegating", "Цель зафиксирована. Мастер поручил поиск планировщику и проверку рецензенту.", 0)
-	s.event(id, "planner", "searching", "Планировщик вызывает полный поиск допустимых планов в Go.", 0)
-	search, err := s.config.Search(ctx, brief.Goal, 5)
-	s.update(id, func(r *Run) {
-		r.Evaluated = search.Evaluated
-		r.Feasible = search.Feasible
-		r.Exhaustive = search.Exhaustive
-	})
-	if err != nil {
-		s.fail(ctx, id, err)
-		return
-	}
-	if !search.Exhaustive {
-		s.finish(id, "failed", "Поиск не завершён; оптимальность и невыполнимость не подтверждены.")
-		return
-	}
-	if len(search.Candidates) == 0 {
-		s.finish(id, "infeasible", "Полный перебор не нашёл план из пяти мер, удовлетворяющий всем ограничениям. Измените бюджет или требования.")
-		return
-	}
-	// Recalculate tool results at the trust boundary, even for injected search
-	// implementations. Models only select a server-owned candidate index.
-	candidates := make([]simulation.Result, 0, len(search.Candidates))
-	for _, candidate := range search.Candidates {
-		verified := simulation.Simulate(candidate.Decisions)
-		if !optimizer.SatisfiesGoal(brief.Goal, verified) {
-			s.finish(id, "failed", "Результат поиска не прошёл повторную проверку ограничений.")
-			return
-		}
-		candidates = append(candidates, verified)
-	}
-	s.update(id, func(r *Run) { r.Result = &candidates[0] })
-	// Resolve each candidate separately: a shared measure catalogue alone makes
-	// it too easy for the writer to mix actions from different alternatives.
-	candidateActions := make([][]resolvedAction, len(candidates))
-	for i, candidate := range candidates {
-		candidateActions[i] = resolveActions(candidate)
-	}
-	s.event(id, "planner", "searched", fmt.Sprintf("Проверено %d сценариев; ограничениям соответствуют %d. Подготовлены %d лучших вариантов.", search.Evaluated, search.Feasible, len(candidates)), 0)
+	var candidates []simulation.Result
+	var err error
 	var previous *Review
 	lastProposal := ""
 	for iteration := 1; iteration <= s.config.MaxIterations; iteration++ {
@@ -335,6 +284,28 @@ func (s *Service) execute(ctx context.Context, id string) {
 			return
 		}
 		s.update(id, func(r *Run) { r.Iterations = iteration })
+		if len(candidates) == 0 || (previous != nil && previous.RevisionTarget == "master") {
+			var prior *Brief
+			if previous != nil {
+				copy := brief
+				prior = &copy
+			}
+			var retry *Review
+			var ok bool
+			brief, candidates, retry, ok = s.prepare(ctx, id, run.Goal, prior, previous, iteration)
+			if !ok {
+				return
+			}
+			lastProposal = ""
+			if retry != nil {
+				previous = retry
+				continue
+			}
+		}
+		candidateActions := make([][]resolvedAction, len(candidates))
+		for i, candidate := range candidates {
+			candidateActions[i] = resolveActions(candidate)
+		}
 		s.event(id, "planner", "proposing", "Планировщик выбирает проверенный вариант и готовит обоснование.", iteration)
 		var proposal Proposal
 		input := map[string]any{"user_goal": run.Goal, "brief": brief, "candidates": candidates, "candidate_actions": candidateActions, "scenario_context": scenarioContext(candidates), "previous_review": previous, "iteration": iteration}
@@ -343,12 +314,12 @@ func (s *Service) execute(ctx context.Context, id string) {
 			return
 		}
 		if proposal.CandidateIndex < 0 || proposal.CandidateIndex >= len(candidates) || strings.TrimSpace(proposal.Explanation) == "" {
-			previous = &Review{Feedback: "Выбери существующий candidate_index из списка и дай непустое обоснование по проверенным данным.", Tradeoffs: []string{}}
+			previous = &Review{RevisionTarget: "planner", Feedback: "Выбери существующий candidate_index из списка и дай непустое обоснование по проверенным данным.", Tradeoffs: []string{}}
 			s.event(id, "master", "revision", "Мастер отклонил неполное предложение и вернул его планировщику.", iteration)
 			continue
 		}
 		if !optimizer.EquallyRanked(brief.Goal, candidates[proposal.CandidateIndex], candidates[0]) {
-			previous = &Review{Feedback: "Выбранный вариант хуже лучшего по зафиксированной цели. Выбери candidate_index=0 или вариант с тем же значением цели и итоговым Score; ограничения и цель менять нельзя.", Tradeoffs: []string{}}
+			previous = &Review{RevisionTarget: "planner", Feedback: "Выбранный вариант хуже лучшего по зафиксированной цели. Выбери candidate_index=0 или вариант с тем же значением цели и итоговым Score; ограничения и цель менять нельзя.", Tradeoffs: []string{}}
 			s.event(id, "master", "revision", "Мастер отклонил вариант, уступающий проверенному оптимуму по заданной цели.", iteration)
 			continue
 		}
@@ -359,30 +330,117 @@ func (s *Service) execute(ctx context.Context, id string) {
 		}
 		lastProposal = fingerprint
 		selected := candidates[proposal.CandidateIndex]
-		s.update(id, func(r *Run) { r.Result = &selected; r.Explanation = proposal.Explanation; r.Review = nil })
+		s.update(id, func(r *Run) {
+			r.Result = &selected
+			r.Explanation = proposal.Explanation
+			r.Review = nil
+			r.Optimality = certifyOptimality(brief.Goal, candidates[0], selected, true)
+		})
 		s.event(id, "reviewer", "checking", "Рецензент проверяет соответствие цели, объяснение и потери по районам.", iteration)
 		var review Review
-		if err = s.call(ctx, id, "reviewer", map[string]any{"user_goal": run.Goal, "brief": brief, "result": selected, "selected_actions": candidateActions[proposal.CandidateIndex], "best_result": candidates[0], "scenario_context": scenarioContext([]simulation.Result{selected}), "proposal": proposal, "previous_review": previous}, &review); err != nil {
+		if err = s.call(ctx, id, "reviewer", map[string]any{"user_goal": run.Goal, "brief": brief, "result": selected, "selected_actions": candidateActions[proposal.CandidateIndex], "best_result": candidates[0], "scenario_context": scenarioContext([]simulation.Result{selected}), "proposal": proposal, "previous_review": previous, "optimality": certifyOptimality(brief.Goal, candidates[0], selected, true)}, &review); err != nil {
 			s.fail(ctx, id, err)
 			return
 		}
 		if review.Tradeoffs == nil {
 			review.Tradeoffs = []string{}
 		}
+		validTarget := review.RevisionTarget == "none" || review.RevisionTarget == "planner" || review.RevisionTarget == "master"
+		if !validTarget || review.Approved != (review.RevisionTarget == "none") || strings.TrimSpace(review.Feedback) == "" {
+			s.fail(ctx, id, errors.New("invalid review routing protocol"))
+			return
+		}
 		if err = ctx.Err(); err != nil {
 			s.fail(ctx, id, err)
 			return
 		}
 		s.update(id, func(r *Run) { r.Review = &review })
-		if review.Approved && strings.TrimSpace(review.Feedback) != "" && optimizer.SatisfiesGoal(brief.Goal, selected) {
+		if review.Approved && optimizer.SatisfiesGoal(brief.Goal, selected) {
 			s.event(id, "master", "verified", "Мастер получил одобрение рецензента и подтвердил расчёт и ограничения в Go.", iteration)
 			s.finish(id, "completed", "Готовый план рассчитан и проверен. Его можно использовать в симуляторе.")
 			return
 		}
 		previous = &review
-		s.event(id, "master", "revision", "Рецензент нашёл замечания. Мастер отправил их планировщику для исправления.", iteration)
+		if review.RevisionTarget == "master" {
+			s.event(id, "reviewer", "revision_to_master", "Рецензент нашёл ошибку в понимании цели и вернул мастеру замечания: "+review.Feedback, iteration)
+		} else {
+			s.event(id, "master", "revision", "Мастер передал планировщику замечания рецензента: "+review.Feedback, iteration)
+		}
 	}
 	s.finish(id, "needs_review", "Лимит итераций достигнут. План рассчитан, но AI-проверка не завершена; задача не отмечена выполненной.")
+}
+
+func (s *Service) prepare(ctx context.Context, id, userGoal string, prior *Brief, feedback *Review, iteration int) (Brief, []simulation.Result, *Review, bool) {
+	if prior != nil {
+		s.update(id, func(r *Run) {
+			r.Brief, r.Result, r.Review, r.Optimality = nil, nil, nil, nil
+			r.Explanation = ""
+			r.Evaluated, r.Feasible, r.Exhaustive = 0, 0, false
+		})
+	}
+	requestedBudget, parseErr := explicitBudgetLimit(userGoal)
+	if parseErr != nil {
+		s.finish(id, "needs_clarification", "Укажите один явный бюджет целым числом от 1 до 100; сейчас ограничение неоднозначно или вне диапазона.")
+		return Brief{}, nil, nil, false
+	}
+	s.event(id, "master", "interpreting", "Мастер переводит цель в ограничения для поиска.", iteration)
+	var brief Brief
+	if err := s.call(ctx, id, "master", map[string]any{"user_goal": userGoal, "scenario": simulation.DefaultScenario(), "previous_brief": prior, "previous_review": feedback}, &brief); err != nil {
+		s.fail(ctx, id, err)
+		return Brief{}, nil, nil, false
+	}
+	s.update(id, func(r *Run) { r.Brief = &brief })
+	if strings.TrimSpace(brief.Clarification) != "" {
+		s.finish(id, "needs_clarification", brief.Clarification)
+		return Brief{}, nil, nil, false
+	}
+	if err := optimizer.ValidateGoal(brief.Goal); err != nil {
+		s.finish(id, "needs_clarification", "Не удалось однозначно перевести цель в поддерживаемые ограничения. Укажите бюджет, приоритетный район или цель повышения Score.")
+		return Brief{}, nil, nil, false
+	}
+	if requestedBudget != nil && brief.Goal.BudgetLimit != *requestedBudget {
+		correction := &Review{RevisionTarget: "master", Feedback: fmt.Sprintf("Go проверил явное ограничение исходного запроса: бюджет %d. В формальной цели указан %d. Исправь budget_limit на %d, сохрани остальные требования пользователя.", *requestedBudget, brief.Goal.BudgetLimit, *requestedBudget), Tradeoffs: []string{}}
+		s.update(id, func(r *Run) { r.Review = correction })
+		s.event(id, "master", "explicit_budget_correction", correction.Feedback, iteration)
+		return brief, nil, correction, true
+	}
+	s.event(id, "master", "delegating", "Цель зафиксирована. Мастер поручил поиск планировщику и проверку рецензенту.", iteration)
+	s.event(id, "planner", "searching", "Планировщик вызывает полный поиск допустимых планов в Go.", iteration)
+	search, err := s.config.Search(ctx, brief.Goal, 5)
+	s.update(id, func(r *Run) {
+		r.Evaluated = search.Evaluated
+		r.Feasible = search.Feasible
+		r.Exhaustive = search.Exhaustive
+	})
+	if err != nil {
+		s.fail(ctx, id, err)
+		return Brief{}, nil, nil, false
+	}
+	if !search.Exhaustive {
+		s.finish(id, "failed", "Поиск не завершён; оптимальность и невыполнимость не подтверждены.")
+		return Brief{}, nil, nil, false
+	}
+	if len(search.Candidates) == 0 {
+		s.finish(id, "infeasible", "Полный перебор не нашёл план из пяти мер, удовлетворяющий всем ограничениям. Измените бюджет или требования.")
+		return Brief{}, nil, nil, false
+	}
+	// Recalculate tool results at the trust boundary, even for injected search
+	// implementations. Models only select a server-owned candidate index.
+	candidates := make([]simulation.Result, 0, len(search.Candidates))
+	for _, candidate := range search.Candidates {
+		verified := simulation.Simulate(candidate.Decisions)
+		if !optimizer.SatisfiesGoal(brief.Goal, verified) {
+			s.finish(id, "failed", "Результат поиска не прошёл повторную проверку ограничений.")
+			return Brief{}, nil, nil, false
+		}
+		candidates = append(candidates, verified)
+	}
+	s.update(id, func(r *Run) {
+		r.Result = &candidates[0]
+		r.Optimality = certifyOptimality(brief.Goal, candidates[0], candidates[0], true)
+	})
+	s.event(id, "planner", "searched", fmt.Sprintf("Проверено %d сценариев; ограничениям соответствуют %d. Подготовлены %d лучших вариантов.", search.Evaluated, search.Feasible, len(candidates)), iteration)
+	return brief, candidates, nil, true
 }
 
 type resolvedAction struct {

@@ -43,7 +43,7 @@ func fillRole(role string, out any) {
 	case "planner":
 		*out.(*Proposal) = Proposal{CandidateIndex: 0, Explanation: "План рассчитан по данным симулятора."}
 	case "reviewer":
-		*out.(*Review) = Review{Approved: true, Feedback: "План соответствует цели.", Tradeoffs: []string{"Эффекты ограничены моделью."}}
+		*out.(*Review) = Review{Approved: true, RevisionTarget: "none", Feedback: "План соответствует цели.", Tradeoffs: []string{"Эффекты ограничены моделью."}}
 	}
 }
 func testResult() simulation.Result {
@@ -131,6 +131,7 @@ func TestMasterRevisionLoopAndVerifiedNumbers(t *testing.T) {
 			reviews++
 			if reviews == 1 {
 				out.(*Review).Approved = false
+				out.(*Review).RevisionTarget = "planner"
 				out.(*Review).Feedback = "Укажи компромиссы."
 			}
 		}
@@ -185,6 +186,7 @@ func TestAutopilotStopsWithoutFalseSuccess(t *testing.T) {
 		{"rejected", "needs_review", func(role string, out any) {
 			if role == "reviewer" {
 				out.(*Review).Approved = false
+				out.(*Review).RevisionTarget = "planner"
 			}
 		}, nil, 1},
 		{"out_of_range", "needs_review", func(role string, out any) {
@@ -195,6 +197,7 @@ func TestAutopilotStopsWithoutFalseSuccess(t *testing.T) {
 		{"repeated_proposal", "needs_review", func(role string, out any) {
 			if role == "reviewer" {
 				out.(*Review).Approved = false
+				out.(*Review).RevisionTarget = "planner"
 			}
 		}, nil, 3},
 	} {
@@ -317,5 +320,202 @@ func TestAutopilotDeadline(t *testing.T) {
 	r := awaitRun(t, s, startRun(t, s).ID)
 	if r.Status != "timeout" {
 		t.Fatal(r.Status)
+	}
+}
+
+func TestReviewerRoutesGoalCorrectionToMaster(t *testing.T) {
+	masters, reviews, searches := 0, 0, 0
+	userGoal := "Максимизируй Score при бюджете не больше девяноста пяти"
+	nura := "nura"
+	best := simulation.Simulate([]simulation.Decision{{MeasureID: "M14"}, {MeasureID: "M2"}, {MeasureID: "M3", DistrictID: &nura}, {MeasureID: "M8", DistrictID: &nura}, {MeasureID: "M9", DistrictID: &nura}})
+	a := &fakeAgents{fn: func(_ context.Context, role string, input json.RawMessage, out any) (Usage, error) {
+		fillRole(role, out)
+		switch role {
+		case "master":
+			masters++
+			if masters == 2 {
+				var received struct {
+					Goal   string  `json:"user_goal"`
+					Brief  *Brief  `json:"previous_brief"`
+					Review *Review `json:"previous_review"`
+				}
+				if json.Unmarshal(input, &received) != nil || received.Goal != userGoal || received.Brief == nil || received.Brief.Goal.BudgetLimit != 100 || received.Review == nil || received.Review.RevisionTarget != "master" {
+					t.Errorf("master did not receive original goal and correction: %s", input)
+				}
+				out.(*Brief).Goal.BudgetLimit = 95
+			}
+		case "reviewer":
+			reviews++
+			if reviews == 1 {
+				*out.(*Review) = Review{Feedback: "Пользователь ограничил бюджет числом 95. Исправь формальную цель.", RevisionTarget: "master", Tradeoffs: []string{}}
+			} else {
+				out.(*Review).RevisionTarget = "none"
+			}
+		}
+		return Usage{InputTokens: 1, OutputTokens: 1, EstimatedCostUSD: .001}, nil
+	}}
+	s := testService(t, a, Config{Search: func(_ context.Context, goal optimizer.Goal, _ int) (optimizer.SearchResult, error) {
+		searches++
+		result := best
+		if goal.BudgetLimit == 95 {
+			result = testResult()
+		}
+		return optimizer.SearchResult{Candidates: []simulation.Result{result}, Evaluated: searches, Feasible: 1, Exhaustive: true}, nil
+	}})
+	started, err := s.Start(Request{Goal: userGoal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := awaitRun(t, s, started.ID)
+	if r.Status != "completed" || r.Iterations != 2 || masters != 2 || searches != 2 || r.Result == nil || r.Result.TotalCost != 95 || r.Brief.Goal.BudgetLimit != 95 || r.Evaluated != 2 {
+		t.Fatalf("goal correction did not trigger a new checked search: %+v", r)
+	}
+	if r.Optimality == nil || !r.Optimality.Proven || r.Optimality.ScoreCeiling == nil || *r.Optimality.ScoreCeiling != *testResult().FinalScore {
+		t.Fatal("optimality certificate was not replaced after goal correction", r.Optimality)
+	}
+	if !reflect.DeepEqual(a.calls(), []string{"master", "planner", "reviewer", "master", "planner", "reviewer"}) {
+		t.Fatal(a.calls())
+	}
+}
+
+func TestMasterCorrectionFailureClearsStalePlan(t *testing.T) {
+	for _, mode := range []string{"clarification", "provider_failure", "incomplete_search", "infeasible"} {
+		t.Run(mode, func(t *testing.T) {
+			masters, searches := 0, 0
+			a := &fakeAgents{fn: func(_ context.Context, role string, _ json.RawMessage, out any) (Usage, error) {
+				fillRole(role, out)
+				if role == "master" {
+					masters++
+					if masters == 2 {
+						if mode == "clarification" {
+							out.(*Brief).Clarification = "Уточните ограничение."
+						}
+						if mode == "provider_failure" {
+							return Usage{Uncertain: true}, errors.New("provider down")
+						}
+					}
+				}
+				if role == "reviewer" {
+					*out.(*Review) = Review{RevisionTarget: "master", Feedback: "Неверно понята цель.", Tradeoffs: []string{}}
+				}
+				return Usage{InputTokens: 1, EstimatedCostUSD: .001}, nil
+			}}
+			s := testService(t, a, Config{Search: func(ctx context.Context, goal optimizer.Goal, limit int) (optimizer.SearchResult, error) {
+				searches++
+				if searches == 2 && mode == "incomplete_search" {
+					return optimizer.SearchResult{}, nil
+				}
+				if searches == 2 && mode == "infeasible" {
+					return optimizer.SearchResult{Exhaustive: true}, nil
+				}
+				return testSearch(ctx, goal, limit)
+			}})
+			r := awaitRun(t, s, startRun(t, s).ID)
+			want := map[string]string{"clarification": "needs_clarification", "provider_failure": "unavailable", "incomplete_search": "failed", "infeasible": "infeasible"}[mode]
+			if r.Status != want || r.Result != nil || r.Optimality != nil || r.Explanation != "" || r.Review != nil {
+				t.Fatalf("stale plan survived master correction: %+v", r)
+			}
+		})
+	}
+}
+
+func TestMasterCorrectionSharesIterationLimit(t *testing.T) {
+	a := &fakeAgents{fn: func(_ context.Context, role string, _ json.RawMessage, out any) (Usage, error) {
+		fillRole(role, out)
+		if role == "reviewer" {
+			*out.(*Review) = Review{RevisionTarget: "master", Feedback: "Исправь цель.", Tradeoffs: []string{}}
+		}
+		return Usage{InputTokens: 1, EstimatedCostUSD: .001}, nil
+	}}
+	s := testService(t, a, Config{MaxIterations: 2})
+	r := awaitRun(t, s, startRun(t, s).ID)
+	if r.Status != "needs_review" || r.Iterations != 2 || len(a.calls()) != 6 {
+		t.Fatalf("master bypassed shared iteration limit: %+v calls=%v", r, a.calls())
+	}
+}
+
+func TestMasterRejectsContradictoryReviewRouting(t *testing.T) {
+	for _, review := range []Review{
+		{Approved: true, RevisionTarget: "master", Feedback: "Исправить цель"},
+		{Approved: false, RevisionTarget: "none", Feedback: "Не одобрено"},
+		{Approved: true, Feedback: "Нет адресата"},
+		{Approved: true, RevisionTarget: "none", Feedback: " "},
+	} {
+		a := &fakeAgents{fn: func(_ context.Context, role string, _ json.RawMessage, out any) (Usage, error) {
+			fillRole(role, out)
+			if role == "reviewer" {
+				*out.(*Review) = review
+			}
+			return Usage{InputTokens: 1, EstimatedCostUSD: .001}, nil
+		}}
+		s := testService(t, a, Config{})
+		r := awaitRun(t, s, startRun(t, s).ID)
+		if r.Status != "unavailable" || r.Review != nil {
+			t.Fatalf("invalid protocol was accepted: %+v", r)
+		}
+	}
+}
+
+func TestExplicitBudgetGuardRepairsBeforeSearch(t *testing.T) {
+	masters, searches := 0, 0
+	a := &fakeAgents{fn: func(_ context.Context, role string, input json.RawMessage, out any) (Usage, error) {
+		fillRole(role, out)
+		if role == "master" {
+			masters++
+			if masters == 2 {
+				var correction struct {
+					Previous *Review `json:"previous_review"`
+				}
+				if json.Unmarshal(input, &correction) != nil || correction.Previous == nil || correction.Previous.RevisionTarget != "master" {
+					t.Error("numeric correction not delivered to master")
+				}
+				out.(*Brief).Goal.BudgetLimit = 95
+			}
+		}
+		return Usage{InputTokens: 1, EstimatedCostUSD: .001}, nil
+	}}
+	s := testService(t, a, Config{Search: func(ctx context.Context, g optimizer.Goal, n int) (optimizer.SearchResult, error) {
+		searches++
+		if g.BudgetLimit != 95 {
+			t.Errorf("wrong goal reached search: %+v", g)
+		}
+		return testSearch(ctx, g, n)
+	}})
+	initial, err := s.Start(Request{Goal: "Максимизируй Score при бюджете не больше 95"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := awaitRun(t, s, initial.ID)
+	if r.Status != "completed" || r.Iterations != 2 || masters != 2 || searches != 1 || !reflect.DeepEqual(a.calls(), []string{"master", "master", "planner", "reviewer"}) {
+		t.Fatalf("numeric guard did not recover: %+v, calls=%v", r, a.calls())
+	}
+}
+
+func TestExplicitBudgetGuardStopsPersistentMisreading(t *testing.T) {
+	a := &fakeAgents{}
+	s := testService(t, a, Config{MaxIterations: 2, Search: func(context.Context, optimizer.Goal, int) (optimizer.SearchResult, error) {
+		t.Error("incorrect budget reached search")
+		return optimizer.SearchResult{}, nil
+	}})
+	initial, err := s.Start(Request{Goal: "Бюджет: 95"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := awaitRun(t, s, initial.ID)
+	if r.Status != "needs_review" || r.Result != nil || r.Optimality != nil || !reflect.DeepEqual(a.calls(), []string{"master", "master"}) {
+		t.Fatalf("invalid budget accepted: %+v calls=%v", r, a.calls())
+	}
+}
+
+func TestInvalidExplicitBudgetNeedsClarificationWithoutPaidCalls(t *testing.T) {
+	a := &fakeAgents{}
+	s := testService(t, a, Config{})
+	initial, err := s.Start(Request{Goal: "Бюджет 95.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := awaitRun(t, s, initial.ID)
+	if r.Status != "needs_clarification" || len(a.calls()) != 0 {
+		t.Fatalf("unsupported numeric budget was silently altered: %+v", r)
 	}
 }
